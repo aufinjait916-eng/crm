@@ -1,0 +1,9 @@
+{
+  "name": "Field Dynamics",
+  "description": "A comprehensive Custom CRM and Dynamic Field Activity app with Role-Based Access Control, Task management, Dynamic Form Builder, and Analytics dashboard.",
+  "requestFramePermissions": [
+    "microphone",
+    "geolocation"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
