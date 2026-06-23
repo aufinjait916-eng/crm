@@ -3,7 +3,14 @@ import path from 'path';
 import bcrypt from 'bcryptjs';
 import { PostgresConfig } from './types';
 
-const DB_FILE = path.join(process.cwd(), 'db.json');
+const DB_FILE = process.env.DB_PATH || path.join(process.cwd(), 'data', 'db.json');
+
+function ensureDbDir() {
+  const dir = path.dirname(DB_FILE);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+}
 
 export interface DbSchema {
   users: any[];
@@ -112,6 +119,7 @@ const DEFAULT_CLIENTS = [
 ];
 
 export function getDb(): DbSchema {
+  ensureDbDir();
   const seedAdminEmail = process.env.ADMIN_EMAIL || "admin@crm.com";
   const seedAdminPassword = process.env.ADMIN_PASSWORD || "admin123";
   const salt = bcrypt.genSaltSync(10);
@@ -210,6 +218,7 @@ export function getDb(): DbSchema {
 
 export function saveDb(data: DbSchema): void {
   try {
+    ensureDbDir();
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
     if (data.postgres_config) {
       syncToPostgres(data).catch((err) => {

@@ -10,9 +10,10 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
+      - DB_PATH=/app/data/db.json
       # If you're using admin or customized credentials in your environment
       # - ADMIN_PASSWORD=your_secure_password
     volumes:
       # Keep local state persistent across container restarts
-      - ./db.json:/app/db.json
+      - ./data:/app/data
       - ./uploads:/app/uploads
