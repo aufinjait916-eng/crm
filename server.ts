@@ -807,6 +807,21 @@ async function startServer() {
     });
   }
 
+  // Initial PostgreSQL sync on boot if configured
+  try {
+    const startupDb = getDb();
+    if (startupDb.postgres_config) {
+      console.log("[POSTGRES STARTUP] Triggering initial database sync with PostgreSQL...");
+      import("./src/db_local").then(({ syncToPostgres }) => {
+        syncToPostgres(startupDb).catch((err) => {
+          console.error("[POSTGRES STARTUP ERROR] Initial boot synchronization failed:", err);
+        });
+      });
+    }
+  } catch (err) {
+    console.error("[POSTGRES STARTUP ERROR] Failed to load database for startup sync:", err);
+  }
+
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Dynamic Field Activity CRM server running on http://localhost:${PORT}`);
   });

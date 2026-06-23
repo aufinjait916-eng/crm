@@ -185,12 +185,14 @@ export function getDb(): DbSchema {
   } else {
     // Sync email and password hash if environment variables are present and out of sync
     const targetEmail = seedAdminEmail.toLowerCase();
+    let emailChanged = false;
     if (adminUser.email !== targetEmail) {
       adminUser.email = targetEmail;
       modified = true;
+      emailChanged = true;
     }
-    // Only re-hash password if ADMIN_PASSWORD is set or it is missing
-    if (process.env.ADMIN_PASSWORD || !adminUser.password_hash) {
+    // Only re-hash password if ADMIN_PASSWORD is set or it is missing or the email changed
+    if (process.env.ADMIN_PASSWORD || !adminUser.password_hash || emailChanged) {
       const isCorrectPassword = bcrypt.compareSync(seedAdminPassword, adminUser.password_hash);
       if (!isCorrectPassword) {
         adminUser.password_hash = bcrypt.hashSync(seedAdminPassword, salt);
@@ -209,7 +211,172 @@ export function getDb(): DbSchema {
 export function saveDb(data: DbSchema): void {
   try {
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    if (data.postgres_config) {
+      syncToPostgres(data).catch((err) => {
+        console.error("PostgreSQL active sync background task failed:", err);
+      });
+    }
   } catch (err) {
     console.error("Error writing database, transaction state failed.", err);
+  }
+}
+
+export async function syncToPostgres(data: DbSchema): Promise<void> {
+  if (!data.postgres_config) return;
+  const { host, port, database, user, password, ssl } = data.postgres_config;
+  if (!host || !database || !user) return;
+
+  try {
+    const { Client } = await import("pg");
+    const client = new Client({
+      host,
+      port: Number(port) || 5432,
+      database,
+      user,
+      password,
+      ssl: ssl ? { rejectUnauthorized: false } : false,
+      connectionTimeoutMillis: 5000
+    });
+
+    await client.connect();
+
+    // 1. Create tables with matching structure from db_local database models
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        role VARCHAR(50) NOT NULL,
+        manager_id INT
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS clients (
+        id INT PRIMARY KEY,
+        contact_name VARCHAR(255) NOT NULL,
+        company_name VARCHAR(255) NOT NULL,
+        phone VARCHAR(255),
+        email VARCHAR(255),
+        address TEXT,
+        country VARCHAR(255),
+        zone VARCHAR(255),
+        state VARCHAR(255),
+        city VARCHAR(255),
+        created_at VARCHAR(255)
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS tasks (
+        id INT PRIMARY KEY,
+        client_id INT,
+        assigned_by INT,
+        assigned_to INT,
+        task_type VARCHAR(100),
+        scheduled_at VARCHAR(255),
+        scheduled_end_at VARCHAR(255),
+        status VARCHAR(100),
+        completed_at VARCHAR(255),
+        created_at VARCHAR(255),
+        voice_url TEXT,
+        comments TEXT
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS form_questions (
+        id INT PRIMARY KEY,
+        question_text TEXT NOT NULL,
+        input_type VARCHAR(100) NOT NULL,
+        options TEXT,
+        is_required BOOLEAN,
+        is_active BOOLEAN
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS task_submissions (
+        id INT PRIMARY KEY,
+        task_id INT,
+        submitted_by INT,
+        submitted_at VARCHAR(255),
+        latitude DOUBLE PRECISION,
+        longitude DOUBLE PRECISION
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS submission_answers (
+        id INT PRIMARY KEY,
+        submission_id INT,
+        question_id INT,
+        answer_value TEXT
+      );
+    `);
+
+    // 2. Clear old staging rows and insert in bulk inside an isolated transaction
+    await client.query("BEGIN;");
+
+    // Sync users
+    await client.query("DELETE FROM users;");
+    for (const u of data.users) {
+      await client.query(
+        "INSERT INTO users (id, name, email, password_hash, role, manager_id) VALUES ($1, $2, $3, $4, $5, $6);",
+        [u.id, u.name, u.email, u.password_hash, u.role, u.manager_id || null]
+      );
+    }
+
+    // Sync clients
+    await client.query("DELETE FROM clients;");
+    for (const c of data.clients) {
+      await client.query(
+        "INSERT INTO clients (id, contact_name, company_name, phone, email, address, country, zone, state, city, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);",
+        [c.id, c.contact_name, c.company_name, c.phone || null, c.email || null, c.address || null, c.country || null, c.zone || null, c.state || null, c.city || null, c.created_at || null]
+      );
+    }
+
+    // Sync tasks
+    await client.query("DELETE FROM tasks;");
+    for (const t of data.tasks || []) {
+      await client.query(
+        "INSERT INTO tasks (id, client_id, assigned_by, assigned_to, task_type, scheduled_at, scheduled_end_at, status, completed_at, created_at, voice_url, comments) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);",
+        [t.id, t.client_id, t.assigned_by, t.assigned_to, t.task_type, t.scheduled_at, t.scheduled_end_at || null, t.status, t.completed_at || null, t.created_at, t.voice_url || null, t.comments || null]
+      );
+    }
+
+    // Sync form_questions
+    await client.query("DELETE FROM form_questions;");
+    for (const q of data.form_questions || []) {
+      await client.query(
+        "INSERT INTO form_questions (id, question_text, input_type, options, is_required, is_active) VALUES ($1, $2, $3, $4, $5, $6);",
+        [q.id, q.question_text, q.input_type, q.options ? JSON.stringify(q.options) : null, !!q.is_required, !!q.is_active]
+      );
+    }
+
+    // Sync task_submissions
+    await client.query("DELETE FROM task_submissions;");
+    for (const ts of data.task_submissions || []) {
+      await client.query(
+        "INSERT INTO task_submissions (id, task_id, submitted_by, submitted_at, latitude, longitude) VALUES ($1, $2, $3, $4, $5, $6);",
+        [ts.id, ts.task_id, ts.submitted_by, ts.submitted_at, ts.latitude ?? null, ts.longitude ?? null]
+      );
+    }
+
+    // Sync submission_answers
+    await client.query("DELETE FROM submission_answers;");
+    for (const sa of data.submission_answers || []) {
+      await client.query(
+        "INSERT INTO submission_answers (id, submission_id, question_id, answer_value) VALUES ($1, $2, $3, $4);",
+        [sa.id, sa.submission_id, sa.question_id, sa.answer_value || ""]
+      );
+    }
+
+    await client.query("COMMIT;");
+    await client.end();
+    console.log("[POSTGRES SYNC] Successfully synchronized all local records to the remote PostgreSQL database!");
+  } catch (err: any) {
+    console.error("[POSTGRES SYNC ERROR] PostgreSQL active sync failed:", err);
   }
 }

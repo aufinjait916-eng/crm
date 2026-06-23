@@ -3,7 +3,7 @@ import { Client, User, Task, ManagerAnalytics } from '../types';
 import { 
   Calendar, CalendarPlus, UserCheck, PhoneCall, MapPin, 
   Clock, CheckCircle, AlertCircle, FileText, BarChart3, Search, TrendingUp, RefreshCw,
-  ChevronLeft, ChevronRight, Volume2, User as UserIcon, Menu, Building
+  ChevronLeft, ChevronRight, Volume2, User as UserIcon, Menu, Building, Download
 } from 'lucide-react';
 
 interface ManagerDashboardProps {
@@ -55,6 +55,118 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
   const [errorNote, setErrorNote] = useState<string | null>(null);
   const [successNote, setSuccessNote] = useState<string | null>(null);
   const [refreshLoading, setRefreshLoading] = useState(false);
+
+  // TASK REPORT GENERATOR STATE FOR SALES MANAGER
+  const [rptStartDate, setRptStartDate] = useState('');
+  const [rptEndDate, setRptEndDate] = useState('');
+  const [rptStatus, setRptStatus] = useState('all');
+  const [rptType, setRptType] = useState('all');
+
+  const handleDownloadTaskReport = () => {
+    if (!rptStartDate || !rptEndDate) {
+      triggerAlert("Please select both a Start Date and End Date for the report.", true);
+      return;
+    }
+    const start = new Date(rptStartDate);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(rptEndDate);
+    end.setHours(23, 59, 59, 999);
+
+    if (start > end) {
+      triggerAlert("Start Date cannot be after End Date.", true);
+      return;
+    }
+
+    const matchedTasks = tasks.filter(t => {
+      if (!t.scheduled_at) return false;
+      const tDate = new Date(t.scheduled_at);
+      if (tDate < start || tDate > end) return false;
+      if (rptStatus !== 'all' && t.status !== rptStatus) return false;
+      if (rptType !== 'all' && t.task_type !== rptType) return false;
+      return true;
+    });
+
+    if (matchedTasks.length === 0) {
+      triggerAlert("No task logs found matching the selected range and parameters.", true);
+      return;
+    }
+
+    // CSV format
+    const csvHeaders = [
+      "Task ID", 
+      "Client", 
+      "Company", 
+      "Assigned Representative", 
+      "Assigned By / Manager", 
+      "Task Type", 
+      "Scheduled Time", 
+      "Scheduled End Time", 
+      "Status", 
+      "Completed Time", 
+      "Comments/Outcomes", 
+      "Voice Recording URL", 
+      "Created Date"
+    ];
+
+    const csvRows = matchedTasks.map(t => {
+      let assignee = t.assignee_name;
+      if (!assignee) {
+        const matchingE = executives.find(e => e.id === t.assigned_to);
+        assignee = matchingE ? matchingE.name : `Id: ${t.assigned_to}`;
+      }
+
+      let creator = t.creator_name;
+      if (!creator) {
+        const matchingS = executives.find(s => s.id === t.assigned_by);
+        creator = matchingS ? matchingS.name : `Id: ${t.assigned_by}`;
+      }
+
+      let clientName = t.client_name;
+      let companyName = t.company_name;
+      if (!clientName) {
+        const matchingCl = clients.find(c => c.id === t.client_id);
+        if (matchingCl) {
+          clientName = matchingCl.contact_name;
+          companyName = matchingCl.company_name;
+        }
+      }
+
+      return [
+        t.id,
+        clientName || "N/A",
+        companyName || "N/A",
+        assignee || "N/A",
+        creator || "N/A",
+        t.task_type === 'visit' ? 'Office Visit' : 'Phone Call',
+        t.scheduled_at ? new Date(t.scheduled_at).toLocaleString() : "N/A",
+        t.scheduled_end_at ? new Date(t.scheduled_end_at).toLocaleString() : "N/A",
+        t.status === 'completed' ? 'Completed' : 'Pending',
+        t.completed_at ? new Date(t.completed_at).toLocaleString() : "N/A",
+        t.comments || "",
+        t.voice_url || "",
+        t.created_at ? new Date(t.created_at).toLocaleString() : "N/A"
+      ];
+    });
+
+    const csvContent = [
+      csvHeaders.join(","),
+      ...csvRows.map(row => row.map(val => {
+        const formattedStr = String(val ?? "").replace(/"/g, '""');
+        return `"${formattedStr}"`;
+      }).join(","))
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `field_dynamics_task_report_${rptStartDate}_to_${rptEndDate}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    triggerAlert(`Task report downloaded successfully with ${matchedTasks.length} record(s).`);
+  };
 
   const triggerAlert = (msg: string, isError = false) => {
     if (isError) {
@@ -409,6 +521,74 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
                   {analytics?.total_completed_calls ?? 0}
                 </div>
                 <div className="text-xs text-slate-450 font-bold uppercase tracking-wide font-medium">Calls Logged</div>
+              </div>
+            </div>
+          </div>
+
+          {/* TASK REPORT RANGE DOWNLOADER CARD */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col space-y-4">
+            <div className="flex items-center space-x-2 pb-2 border-b border-slate-100">
+              <Download className="h-5 w-5 text-emerald-600" />
+              <div>
+                <h4 className="text-sm font-bold text-slate-900 font-sans uppercase tracking-wide">Generate & Download Task Report</h4>
+                <p className="text-xs text-slate-450 mt-0.5">Select a start/end date range to download matching field operation and visit logs as CSV.</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 shadow-sm">Start Date</label>
+                <input 
+                  type="date"
+                  value={rptStartDate}
+                  onChange={(e) => setRptStartDate(e.target.value)}
+                  className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 shadow-sm">End Date</label>
+                <input 
+                  type="date"
+                  value={rptEndDate}
+                  onChange={(e) => setRptEndDate(e.target.value)}
+                  className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 shadow-sm">Filters</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <select
+                    value={rptStatus}
+                    onChange={(e) => setRptStatus(e.target.value)}
+                    className="w-full text-xs px-2 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none font-medium text-slate-700"
+                  >
+                    <option value="all">All Status</option>
+                    <option value="completed">Completed</option>
+                    <option value="pending">Pending</option>
+                  </select>
+
+                  <select
+                    value={rptType}
+                    onChange={(e) => setRptType(e.target.value)}
+                    className="w-full text-xs px-2 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none font-medium text-slate-700"
+                  >
+                    <option value="all">All Types</option>
+                    <option value="visit">Visits</option>
+                    <option value="call">Calls</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <button
+                  onClick={handleDownloadTaskReport}
+                  className="w-full text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 py-2.5 rounded-lg shadow-sm font-sans flex items-center justify-center space-x-2 hover:shadow-emerald-500/10 transition-all cursor-pointer transform hover:-translate-y-0.5"
+                >
+                  <Download className="h-4 w-4" />
+                  <span>Download Report</span>
+                </button>
               </div>
             </div>
           </div>
