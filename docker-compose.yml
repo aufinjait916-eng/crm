@@ -1,0 +1,18 @@
+services:
+  crm-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crm-field-dynamics
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # If you're using admin or customized credentials in your environment
+      # - ADMIN_PASSWORD=your_secure_password
+    volumes:
+      # Keep local state persistent across container restarts
+      - ./db.json:/app/db.json
+      - ./uploads:/app/uploads
