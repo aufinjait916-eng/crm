@@ -1,10 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Country, State, City } from 'country-state-city';
 import { Client, User, Task, ManagerAnalytics } from '../types';
 import { 
   Calendar, CalendarPlus, UserCheck, PhoneCall, MapPin, 
   Clock, CheckCircle, AlertCircle, FileText, BarChart3, Search, TrendingUp, RefreshCw,
-  ChevronLeft, ChevronRight, Volume2, User as UserIcon, Menu, Building, Download
+  ChevronLeft, ChevronRight, Volume2, User as UserIcon, Menu, Building, Download, Edit2, Trash2
 } from 'lucide-react';
+import { LOCATION_DATA } from '../utils/locationData';
+import DynamicFormRenderer from './DynamicFormRenderer';
 
 interface ManagerDashboardProps {
   token: string;
@@ -31,14 +34,53 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
   const [cAddress, setCAddress] = useState('');
   const [cCountry, setCCountry] = useState('United States');
   const [cZone, setCZone] = useState('');
-  const [cState, setCState] = useState('');
-  const [cCity, setCity] = useState('');
+  const [cState, setCState] = useState('California');
+  const [cCity, setCity] = useState('Los Angeles');
+
+  // Geographic Location memoization
+  const allCountries = useMemo(() => Country.getAllCountries(), []);
+
+  const activeCountryObj = useMemo(() => {
+    return allCountries.find(c => c.name === cCountry);
+  }, [allCountries, cCountry]);
+
+  const activeCountryStates = useMemo(() => {
+    return activeCountryObj ? State.getStatesOfCountry(activeCountryObj.isoCode) : [];
+  }, [activeCountryObj]);
+
+  const activeStateObj = useMemo(() => {
+    return activeCountryStates.find(s => s.name === cState);
+  }, [activeCountryStates, cState]);
+
+  const activeStateCities = useMemo(() => {
+    return (activeCountryObj && activeStateObj) 
+      ? City.getCitiesOfState(activeCountryObj.isoCode, activeStateObj.isoCode) 
+      : [];
+  }, [activeCountryObj, activeStateObj]);
 
   // Scheduler Form state
   const [targetClientId, setTargetClientId] = useState('');
   const [targetExecId, setTargetExecId] = useState('');
-  const [targetTaskType, setTargetTaskType] = useState<'visit' | 'call'>('call');
+  const [targetTaskType, setTargetTaskType] = useState<string>('call');
   const [targetScheduledAt, setTargetScheduledAt] = useState('');
+
+  // Dynamic Session Types and Questions
+  const [sessionTypes, setSessionTypes] = useState<any[]>([]);
+  const [questions, setQuestions] = useState<any[]>([]);
+
+  // Task Completion (Self assigned) states
+  const [currentUserId, setCurrentUserId] = useState<number | null>(null);
+  const [activeTaskForForm, setActiveTaskForForm] = useState<Task | null>(null);
+  const [completeLoading, setCompleteLoading] = useState(false);
+
+  // Task Editing states
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editClientId, setEditClientId] = useState('');
+  const [editExecId, setEditExecId] = useState('');
+  const [editTaskType, setEditTaskType] = useState('');
+  const [editScheduledAt, setEditScheduledAt] = useState('');
+  const [editComments, setEditComments] = useState('');
+  const [editStatus, setEditStatus] = useState('');
 
   // Overlay state to view submission details
   const [selectedTaskForModal, setSelectedTaskForModal] = useState<Task | null>(null);
@@ -192,6 +234,7 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
       // Check current user profile from `/api/auth/me` to filter reporting executives
       const meRes = await fetch('/api/auth/me', { headers: { 'Authorization': `Bearer ${token}` } });
       const meData = await meRes.json();
+      setCurrentUserId(meData.id);
       
       const managedSubordinates = allUsers.filter(u => u.manager_id === meData.id || u.id === meData.id);
       setExecutives(managedSubordinates);
@@ -207,6 +250,14 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
       // 4. Get Analytics
       const analyticsRes = await fetch('/api/analytics/manager', { headers: { 'Authorization': `Bearer ${token}` } });
       if (analyticsRes.ok) setAnalytics(await analyticsRes.json());
+
+      // 5. Get Session Types
+      const stRes = await fetch('/api/session-types', { headers: { 'Authorization': `Bearer ${token}` } });
+      if (stRes.ok) setSessionTypes(await stRes.json());
+
+      // 6. Get Questions
+      const questionsRes = await fetch('/api/admin/forms', { headers: { 'Authorization': `Bearer ${token}` } });
+      if (questionsRes.ok) setQuestions(await questionsRes.json());
 
     } catch (e: any) {
       console.error(e);
@@ -250,6 +301,79 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
       setTargetClientId('');
       setTargetExecId('');
       setTargetScheduledAt('');
+      loadData();
+    } catch (err: any) {
+      triggerAlert(err.message, true);
+    }
+  };
+
+  const handleCompleteSelfTask = async (answers: any[]) => {
+    if (!activeTaskForForm) return;
+    setCompleteLoading(true);
+    try {
+      const res = await fetch(`/api/tasks/${activeTaskForForm.id}/submit`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ answers })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to submit task details");
+      triggerAlert("Task completed successfully!", false);
+      setActiveTaskForForm(null);
+      loadData();
+    } catch (err: any) {
+      triggerAlert(err.message, true);
+    } finally {
+      setCompleteLoading(false);
+    }
+  };
+
+  const handleEditTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTask) return;
+    try {
+      const res = await fetch(`/api/tasks/${editingTask.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          client_id: Number(editClientId),
+          assigned_to: Number(editExecId),
+          task_type: editTaskType,
+          scheduled_at: editScheduledAt,
+          comments: editComments || null,
+          status: editStatus
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to edit task");
+      triggerAlert("Task updated successfully!", false);
+      setEditingTask(null);
+      loadData();
+    } catch (err: any) {
+      triggerAlert(err.message, true);
+    }
+  };
+
+  const handleDeleteTask = async (taskId: number) => {
+    if (!window.confirm("Are you sure you want to delete this task assignment? This action is irreversible.")) return;
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.detail || "Failed to delete task");
+      }
+      triggerAlert("Task assignment deleted successfully!", false);
       loadData();
     } catch (err: any) {
       triggerAlert(err.message, true);
@@ -363,11 +487,11 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
 
   const getTaskDurationDisplay = (task: Task) => {
     const start = new Date(task.scheduled_at);
-    const end = task.scheduled_end_at 
-      ? new Date(task.scheduled_end_at) 
-      : new Date(start.getTime() + (task.task_type === 'visit' ? 45 : 15) * 60 * 1000);
-    
-    return `${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (${task.task_type === 'visit' ? '45m' : '15m'})`;
+    if (!task.scheduled_end_at || task.scheduled_end_at === task.scheduled_at) {
+      return `${start.toLocaleDateString()} ${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    }
+    const end = new Date(task.scheduled_end_at);
+    return `${start.toLocaleDateString()} ${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
   };
 
   return (
@@ -542,7 +666,7 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
                   type="date"
                   value={rptStartDate}
                   onChange={(e) => setRptStartDate(e.target.value)}
-                  className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium"
+                  className="w-full max-w-xs md:max-w-none text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium"
                 />
               </div>
 
@@ -552,7 +676,7 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
                   type="date"
                   value={rptEndDate}
                   onChange={(e) => setRptEndDate(e.target.value)}
-                  className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium"
+                  className="w-full max-w-xs md:max-w-none text-xs px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium"
                 />
               </div>
 
@@ -707,11 +831,19 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
                 <select
                   required
                   value={targetTaskType}
-                  onChange={(e) => setTargetTaskType(e.target.value as 'visit' | 'call')}
+                  onChange={(e) => setTargetTaskType(e.target.value)}
                   className="mt-1 block w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"
                 >
-                  <option value="call">💼 Phone Session / Pitch Call (15m default)</option>
-                  <option value="visit">📍 In-Person Office Visit (45m default)</option>
+                  <option value="">-- Select Session Type --</option>
+                  {sessionTypes.map(st => (
+                    <option key={st.id} value={st.name}>{st.name.toUpperCase()}</option>
+                  ))}
+                  {sessionTypes.length === 0 && (
+                    <>
+                      <option value="call">💼 Phone Session / Pitch Call</option>
+                      <option value="visit">📍 In-Person Office Visit</option>
+                    </>
+                  )}
                 </select>
               </div>
 
@@ -765,6 +897,39 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
                         <span className="font-medium text-slate-700">Scheduled: {getTaskDurationDisplay(task)}</span>
                       </div>
                     </div>
+                  </div>
+
+                  <div className="flex items-center space-x-2 shrink-0">
+                    {task.assigned_to === currentUserId && (
+                      <button
+                        onClick={() => setActiveTaskForForm(task)}
+                        className="bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 px-3 py-1.5 rounded-lg text-xs font-bold transition"
+                      >
+                        Complete Task
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        setEditingTask(task);
+                        setEditClientId(String(task.client_id));
+                        setEditExecId(String(task.assigned_to));
+                        setEditTaskType(task.task_type);
+                        setEditScheduledAt(new Date(task.scheduled_at).toISOString().slice(0, 16));
+                        setEditComments(task.comments || '');
+                        setEditStatus(task.status);
+                      }}
+                      className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 border border-slate-200 rounded-lg transition"
+                      title="Edit Assignment"
+                    >
+                      <Edit2 className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteTask(task.id)}
+                      className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 rounded-lg transition"
+                      title="Delete Assignment"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 </div>
               ))}
@@ -975,17 +1140,51 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right text-xs">
-                        {task.status === 'completed' ? (
+                        <div className="flex items-center justify-end space-x-2">
+                          {task.status === 'completed' ? (
+                            <button
+                              onClick={() => handleViewAnswers(task)}
+                              className="flex items-center space-x-1 border border-slate-200 hover:bg-slate-100 p-1 px-2.5 rounded-lg text-emerald-600 font-semibold transition"
+                            >
+                              <FileText className="h-3.5 w-3.5" />
+                              <span>View Entry</span>
+                            </button>
+                          ) : (
+                            <>
+                              {task.assigned_to === currentUserId && (
+                                <button
+                                  onClick={() => setActiveTaskForForm(task)}
+                                  className="bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 px-2 py-1 rounded-lg text-xs font-bold transition"
+                                >
+                                  Complete Task
+                                </button>
+                              )}
+                              <span className="text-slate-350 italic text-[10.5px]">Pending</span>
+                            </>
+                          )}
                           <button
-                            onClick={() => handleViewAnswers(task)}
-                            className="flex items-center space-x-1 border border-slate-200 hover:bg-slate-100 p-1 px-2.5 rounded-lg text-emerald-600 font-semibold transition inline-flex ml-auto"
+                            onClick={() => {
+                              setEditingTask(task);
+                              setEditClientId(String(task.client_id));
+                              setEditExecId(String(task.assigned_to));
+                              setEditTaskType(task.task_type);
+                              setEditScheduledAt(new Date(task.scheduled_at).toISOString().slice(0, 16));
+                              setEditComments(task.comments || '');
+                              setEditStatus(task.status);
+                            }}
+                            className="p-1 text-slate-500 hover:text-blue-600 hover:bg-blue-50 border border-slate-200 rounded-lg transition"
+                            title="Edit Assignment"
                           >
-                            <FileText className="h-3.5 w-3.5" />
-                            <span>View Entry</span>
+                            <Edit2 className="h-3.5 w-3.5" />
                           </button>
-                        ) : (
-                          <span className="text-slate-350 italic text-[10.5px]">Pending completion</span>
-                        )}
+                          <button
+                            onClick={() => handleDeleteTask(task.id)}
+                            className="p-1 text-slate-500 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 rounded-lg transition"
+                            title="Delete Assignment"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1073,12 +1272,28 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Country</label>
-                  <input
-                    type="text"
+                  <select
                     value={cCountry}
-                    onChange={(e) => setCCountry(e.target.value)}
+                    onChange={(e) => {
+                      const selectedCountryName = e.target.value;
+                      setCCountry(selectedCountryName);
+                      
+                      const countryObj = allCountries.find(c => c.name === selectedCountryName);
+                      const states = countryObj ? State.getStatesOfCountry(countryObj.isoCode) : [];
+                      const firstState = states[0]?.name || '';
+                      setCState(firstState);
+                      
+                      const stateObj = firstState ? states.find(s => s.name === firstState) : null;
+                      const cities = (countryObj && stateObj) ? City.getCitiesOfState(countryObj.isoCode, stateObj.isoCode) : [];
+                      setCity(cities[0]?.name || '');
+                    }}
                     className="mt-1 block w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500/10 focus:border-emerald-500 focus:outline-none"
-                  />
+                  >
+                    <option value="">Select Country</option>
+                    {allCountries.map(country => (
+                      <option key={country.isoCode} value={country.name}>{country.name}</option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Zone</label>
@@ -1095,23 +1310,38 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">State</label>
-                  <input
-                    type="text"
+                  <select
                     value={cState}
-                    onChange={(e) => setCState(e.target.value)}
+                    onChange={(e) => {
+                      const selectedStateName = e.target.value;
+                      setCState(selectedStateName);
+                      
+                      const stateObj = activeCountryStates.find(s => s.name === selectedStateName);
+                      const cities = (activeCountryObj && stateObj) ? City.getCitiesOfState(activeCountryObj.isoCode, stateObj.isoCode) : [];
+                      setCity(cities[0]?.name || '');
+                    }}
                     className="mt-1 block w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500/10 focus:border-emerald-500 focus:outline-none"
-                    placeholder="e.g. CA"
-                  />
+                    disabled={!cCountry}
+                  >
+                    <option value="">Select State</option>
+                    {activeCountryStates.map(state => (
+                      <option key={state.isoCode} value={state.name}>{state.name}</option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">City</label>
-                  <input
-                    type="text"
+                  <select
                     value={cCity}
                     onChange={(e) => setCity(e.target.value)}
                     className="mt-1 block w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500/10 focus:border-emerald-500 focus:outline-none"
-                    placeholder="e.g. Mountain View"
-                  />
+                    disabled={!cState}
+                  >
+                    <option value="">Select City</option>
+                    {activeStateCities.map(city => (
+                      <option key={city.name} value={city.name}>{city.name}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
@@ -1269,6 +1499,164 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
               >
                 Dismiss Details
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* TASK EDIT OVERLAY */}
+      {editingTask && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-slate-100 max-w-lg w-full overflow-hidden shadow-2xl flex flex-col">
+            <div className="p-5 bg-slate-50 border-b border-slate-150 flex items-center justify-between">
+              <div>
+                <span className="text-[10px] bg-emerald-100 px-2 py-0.5 rounded uppercase font-bold text-emerald-700">Modify Assignment</span>
+                <h4 className="text-base font-bold text-slate-900 mt-1">Edit Task Schedule</h4>
+              </div>
+              <button 
+                onClick={() => setEditingTask(null)} 
+                className="text-slate-400 hover:text-slate-700 font-extrabold text-lg bg-slate-200/50 p-1 px-2.5 rounded-full"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleEditTask} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Client Account</label>
+                <select
+                  required
+                  value={editClientId}
+                  onChange={(e) => setEditClientId(e.target.value)}
+                  className="mt-1 block w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"
+                >
+                  {clients.map(c => (
+                    <option key={c.id} value={c.id}>{c.company_name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Assign Representative</label>
+                <select
+                  required
+                  value={editExecId}
+                  onChange={(e) => setEditExecId(e.target.value)}
+                  className="mt-1 block w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"
+                >
+                  {executives.map(e => (
+                    <option key={e.id} value={e.id}>{e.name} ({e.role})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Field Session Type</label>
+                <select
+                  required
+                  value={editTaskType}
+                  onChange={(e) => setEditTaskType(e.target.value)}
+                  className="mt-1 block w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"
+                >
+                  {sessionTypes.map(st => (
+                    <option key={st.id} value={st.name}>{st.name.toUpperCase()}</option>
+                  ))}
+                  {sessionTypes.length === 0 && (
+                    <>
+                      <option value="call">CALL</option>
+                      <option value="visit">VISIT</option>
+                    </>
+                  )}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Scheduled At</label>
+                <input
+                  type="datetime-local"
+                  required
+                  value={editScheduledAt}
+                  onChange={(e) => setEditScheduledAt(e.target.value)}
+                  className="mt-1 block w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Status</label>
+                <select
+                  required
+                  value={editStatus}
+                  onChange={(e) => setEditStatus(e.target.value)}
+                  className="mt-1 block w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"
+                >
+                  <option value="pending">Pending</option>
+                  <option value="completed">Completed</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Comments / Instructions</label>
+                <textarea
+                  value={editComments}
+                  onChange={(e) => setEditComments(e.target.value)}
+                  rows={2}
+                  className="mt-1 block w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"
+                  placeholder="Instructions for representative..."
+                />
+              </div>
+
+              <div className="pt-4 flex items-center justify-end space-x-2 border-t">
+                <button
+                  type="button"
+                  onClick={() => setEditingTask(null)}
+                  className="py-2 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-bold text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="py-2 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs uppercase"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* SELF ASSIGNED TASK COMPLETION OVERLAY */}
+      {activeTaskForForm && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-slate-100 max-w-lg w-full overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+            <div className="p-5 bg-slate-50 border-b border-slate-150 flex items-center justify-between">
+              <div>
+                <span className="text-[10px] bg-emerald-100 px-2 py-0.5 rounded uppercase font-bold text-emerald-700">Self-Assigned Submission</span>
+                <h4 className="text-base font-bold text-slate-900 mt-1">Complete Scheduled Session</h4>
+                <p className="text-xs text-slate-500 mt-0.5">Account: {activeTaskForForm.company_name}</p>
+              </div>
+              <button 
+                onClick={() => setActiveTaskForForm(null)} 
+                className="text-slate-400 hover:text-slate-700 font-extrabold text-lg bg-slate-200/50 p-1 px-2.5 rounded-full"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto flex-1">
+              {/* Render Dynamic Form */}
+              <DynamicFormRenderer
+                questions={(() => {
+                  const activeSessionType = sessionTypes.find(st => st.name === activeTaskForForm.task_type);
+                  return questions.filter(q => {
+                    if (activeSessionType && activeSessionType.template_id) {
+                      return q.template_id === activeSessionType.template_id;
+                    }
+                    return !q.session_type_id || q.session_type_id === activeSessionType?.id;
+                  });
+                })()}
+                onSubmit={handleCompleteSelfTask}
+                loading={completeLoading}
+              />
             </div>
           </div>
         </div>

@@ -19,6 +19,8 @@ export interface DbSchema {
   form_questions: any[];
   task_submissions: any[];
   submission_answers: any[];
+  session_types?: any[];
+  questionnaire_templates?: any[];
   postgres_config?: PostgresConfig;
 }
 
@@ -29,7 +31,8 @@ const DEFAULT_QUESTIONS = [
     input_type: "radio",
     options: ["Yes, met directly", "No, met representative", "Failed to meet any contact"],
     is_required: true,
-    is_active: true
+    is_active: true,
+    template_id: 1
   },
   {
     id: 2,
@@ -37,14 +40,16 @@ const DEFAULT_QUESTIONS = [
     input_type: "dropdown",
     options: ["1 - Very Low Interest", "2 - Mild Curiosity", "3 - Interested but hesitant", "4 - Active Interest", "5 - Ready to sign deal"],
     is_required: true,
-    is_active: true
+    is_active: true,
+    template_id: 1
   },
   {
     id: 3,
     question_text: "Key discussion summary and follow-up points",
     input_type: "text",
     is_required: true,
-    is_active: true
+    is_active: true,
+    template_id: 1
   },
   {
     id: 4,
@@ -52,14 +57,16 @@ const DEFAULT_QUESTIONS = [
     input_type: "checkbox",
     options: ["Catalog Shared"],
     is_required: false,
-    is_active: true
+    is_active: true,
+    template_id: 2
   },
   {
     id: 5,
     question_text: "Target follow-up date & time",
     input_type: "datetime",
     is_required: false,
-    is_active: true
+    is_active: true,
+    template_id: 2
   }
 ];
 
@@ -143,7 +150,15 @@ export function getDb(): DbSchema {
       tasks: [],
       form_questions: DEFAULT_QUESTIONS,
       task_submissions: [],
-      submission_answers: []
+      submission_answers: [],
+      session_types: [
+        { id: 1, name: "visit", label: "📍 Office Visit", template_id: 1 },
+        { id: 2, name: "call", label: "✉ Pitch Call", template_id: 2 }
+      ],
+      questionnaire_templates: [
+        { id: 1, name: "Standard Visit Template", description: "Default questions for physical on-site visits" },
+        { id: 2, name: "Pitch Call Template", description: "Default questions for phone calls and remote pitches" }
+      ]
     };
     saveDb(db);
     return db;
@@ -207,6 +222,42 @@ export function getDb(): DbSchema {
         modified = true;
       }
     }
+  }
+
+  // Ensure dynamic session types exist
+  if (!db.session_types) {
+    db.session_types = [
+      { id: 1, name: "visit", label: "📍 Office Visit", template_id: 1 },
+      { id: 2, name: "call", label: "✉ Pitch Call", template_id: 2 }
+    ];
+    modified = true;
+  }
+
+  // Ensure questionnaire_templates exist
+  if (!db.questionnaire_templates) {
+    db.questionnaire_templates = [
+      { id: 1, name: "Standard Visit Template", description: "Default questions for physical on-site visits" },
+      { id: 2, name: "Pitch Call Template", description: "Default questions for phone calls and remote pitches" }
+    ];
+    // Retroactively assign template_ids to default questions if they don't have them
+    if (db.form_questions) {
+      db.form_questions.forEach(q => {
+        if (q.template_id === undefined) {
+          if (q.id <= 3) q.template_id = 1;
+          else if (q.id <= 5) q.template_id = 2;
+          else q.template_id = null;
+        }
+      });
+    }
+    // Retroactively assign template_ids to default session types if they don't have them
+    db.session_types.forEach(st => {
+      if (st.template_id === undefined) {
+        if (st.name === "visit") st.template_id = 1;
+        else if (st.name === "call") st.template_id = 2;
+        else st.template_id = null;
+      }
+    });
+    modified = true;
   }
 
   if (modified) {

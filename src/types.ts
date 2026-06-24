@@ -1,5 +1,5 @@
 export type UserRole = "admin" | "management" | "manager" | "executive";
-export type TaskType = "visit" | "call";
+export type TaskType = string;
 export type TaskStatus = "pending" | "completed";
 export type InputType = "text" | "number" | "dropdown" | "checkbox" | "radio" | "datetime";
 
@@ -45,6 +45,19 @@ export interface Task {
   creator_name?: string;
 }
 
+export interface QuestionnaireTemplate {
+  id: number;
+  name: string;
+  description?: string | null;
+}
+
+export interface SessionType {
+  id: number;
+  name: string;
+  label: string;
+  template_id?: number | null; // associated questionnaire template
+}
+
 export interface FormQuestion {
   id: number;
   question_text: string;
@@ -52,6 +65,8 @@ export interface FormQuestion {
   options?: string[] | null; // e.g. ["Choice A", "Choice B"]
   is_required: boolean;
   is_active: boolean;
+  session_type_id?: number | null; // attached to a particular session type
+  template_id?: number | null; // attached to a questionnaire template
 }
 
 export interface SubmissionAnswer {

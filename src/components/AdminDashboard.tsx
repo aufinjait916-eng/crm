@@ -1,10 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Country, State, City } from 'country-state-city';
 import { User, Client, FormQuestion, UserRole, InputType, Task } from '../types';
 import { 
   Users, UserPlus, ClipboardType, Briefcase, Plus, Search, 
   Trash2, ToggleLeft, ToggleRight, Check, CheckCircle2, CloudUpload, Sparkles, Building, MapPin, Download, Upload,
-  Database, Settings, Menu, ChevronLeft, ChevronRight, Volume2, Calendar, ClipboardCheck, Clock, User as UserIcon, AlertCircle
+  Database, Settings, Menu, ChevronLeft, ChevronRight, Volume2, Calendar, ClipboardCheck, Clock, User as UserIcon, AlertCircle,
+  Edit, FileText, Layers
 } from 'lucide-react';
+import { LOCATION_DATA } from '../utils/locationData';
 
 interface AdminDashboardProps {
   token: string;
@@ -63,16 +66,53 @@ export default function AdminDashboard({ token, role }: AdminDashboardProps) {
   const [cPhone, setCPhone] = useState('');
   const [cEmail, setCEmail] = useState('');
   const [cAddress, setCAddress] = useState('');
-  const [cCountry, setCCountry] = useState('');
+  const [cCountry, setCCountry] = useState('United States');
   const [cZone, setCZone] = useState('');
-  const [cState, setCState] = useState('');
-  const [cCity, setCCity] = useState('');
+  const [cState, setCState] = useState('California');
+  const [cCity, setCCity] = useState('Los Angeles');
 
   // FORM BUILDER DYNAMIC QUESTION CREATE STATE
   const [qText, setQText] = useState('');
   const [qType, setQType] = useState<InputType>('text');
   const [qOptionsRaw, setQOptionsRaw] = useState(''); // comma-separated options
   const [qRequired, setQRequired] = useState(false);
+  const [qTemplateId, setQTemplateId] = useState<string>('');
+
+  // Questionnaire Templates State
+  const [templates, setTemplates] = useState<any[]>([]);
+  const [newTemplateName, setNewTemplateName] = useState('');
+  const [newTemplateDescription, setNewTemplateDescription] = useState('');
+  const [editingTemplate, setEditingTemplate] = useState<any | null>(null);
+
+  // Field Session Types State
+  const [sessionTypes, setSessionTypes] = useState<any[]>([]);
+  const [newSessionTypeName, setNewSessionTypeName] = useState('');
+  const [newSessionTypeLabel, setNewSessionTypeLabel] = useState('');
+  const [newSessionTypeTemplateId, setNewSessionTypeTemplateId] = useState<string>('');
+  const [editingSessionType, setEditingSessionType] = useState<any | null>(null);
+
+  const [formBuilderSubTab, setFormBuilderSubTab] = useState<'templates' | 'session-types' | 'questions'>('templates');
+
+  // Geographic Location memoization
+  const allCountries = useMemo(() => Country.getAllCountries(), []);
+
+  const activeCountryObj = useMemo(() => {
+    return allCountries.find(c => c.name === cCountry);
+  }, [allCountries, cCountry]);
+
+  const activeCountryStates = useMemo(() => {
+    return activeCountryObj ? State.getStatesOfCountry(activeCountryObj.isoCode) : [];
+  }, [activeCountryObj]);
+
+  const activeStateObj = useMemo(() => {
+    return activeCountryStates.find(s => s.name === cState);
+  }, [activeCountryStates, cState]);
+
+  const activeStateCities = useMemo(() => {
+    return (activeCountryObj && activeStateObj) 
+      ? City.getCitiesOfState(activeCountryObj.isoCode, activeStateObj.isoCode) 
+      : [];
+  }, [activeCountryObj, activeStateObj]);
 
   // TASK REPORT GENERATOR STATE FOR MANAGEMENT OFFICER
   const [rptStartDate, setRptStartDate] = useState('');
@@ -223,6 +263,175 @@ export default function AdminDashboard({ token, role }: AdminDashboardProps) {
     } catch (e) { console.error(e); }
   };
 
+  const fetchTemplates = async () => {
+    try {
+      const res = await fetch('/api/templates', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) setTemplates(await res.json());
+    } catch (e) { console.error(e); }
+  };
+
+  const fetchSessionTypes = async () => {
+    try {
+      const res = await fetch('/api/session-types', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) setSessionTypes(await res.json());
+    } catch (e) { console.error(e); }
+  };
+
+  const handleCreateTemplate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTemplateName) return;
+    try {
+      const res = await fetch('/api/templates', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ name: newTemplateName, description: newTemplateDescription })
+      });
+      if (res.ok) {
+        triggerNote("Questionnaire template created successfully!");
+        setNewTemplateName('');
+        setNewTemplateDescription('');
+        fetchTemplates();
+      } else {
+        const err = await res.json();
+        triggerNote(err.detail || "Failed to create template", true);
+      }
+    } catch (err: any) {
+      triggerNote(err.message, true);
+    }
+  };
+
+  const handleEditTemplate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTemplate || !editingTemplate.name) return;
+    try {
+      const res = await fetch(`/api/templates/${editingTemplate.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ name: editingTemplate.name, description: editingTemplate.description })
+      });
+      if (res.ok) {
+        triggerNote("Questionnaire template updated!");
+        setEditingTemplate(null);
+        fetchTemplates();
+      } else {
+        const err = await res.json();
+        triggerNote(err.detail || "Failed to update template", true);
+      }
+    } catch (err: any) {
+      triggerNote(err.message, true);
+    }
+  };
+
+  const handleDeleteTemplate = async (id: number) => {
+    if (!window.confirm("Are you sure you want to delete this template? Any associated questions or session types will be unlinked.")) return;
+    try {
+      const res = await fetch(`/api/templates/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        triggerNote("Questionnaire template deleted successfully!");
+        fetchTemplates();
+        fetchSessionTypes();
+        fetchQuestions();
+      } else {
+        const err = await res.json();
+        triggerNote(err.detail || "Failed to delete template", true);
+      }
+    } catch (err: any) {
+      triggerNote(err.message, true);
+    }
+  };
+
+  const handleCreateSessionType = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSessionTypeName || !newSessionTypeLabel) return;
+    try {
+      const res = await fetch('/api/session-types', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: newSessionTypeName,
+          label: newSessionTypeLabel,
+          template_id: newSessionTypeTemplateId || null
+        })
+      });
+      if (res.ok) {
+        triggerNote("New field session type created successfully!");
+        setNewSessionTypeName('');
+        setNewSessionTypeLabel('');
+        setNewSessionTypeTemplateId('');
+        fetchSessionTypes();
+      } else {
+        const err = await res.json();
+        triggerNote(err.detail || "Failed to create session type", true);
+      }
+    } catch (err: any) {
+      triggerNote(err.message, true);
+    }
+  };
+
+  const handleEditSessionType = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingSessionType || !editingSessionType.name || !editingSessionType.label) return;
+    try {
+      const res = await fetch(`/api/session-types/${editingSessionType.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: editingSessionType.name,
+          label: editingSessionType.label,
+          template_id: editingSessionType.template_id || null
+        })
+      });
+      if (res.ok) {
+        triggerNote("Field session type updated successfully!");
+        setEditingSessionType(null);
+        fetchSessionTypes();
+      } else {
+        const err = await res.json();
+        triggerNote(err.detail || "Failed to update session type", true);
+      }
+    } catch (err: any) {
+      triggerNote(err.message, true);
+    }
+  };
+
+  const handleDeleteSessionType = async (id: number) => {
+    if (!window.confirm("Are you sure you want to delete this session type? Any scheduled tasks or questions referencing it will be unlinked.")) return;
+    try {
+      const res = await fetch(`/api/session-types/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        triggerNote("Field session type deleted!");
+        fetchSessionTypes();
+      } else {
+        const err = await res.json();
+        triggerNote(err.detail || "Failed to delete session type", true);
+      }
+    } catch (err: any) {
+      triggerNote(err.message, true);
+    }
+  };
+
   const handleViewAnswers = async (task: Task) => {
     setSelectedTaskForModal(task);
     setModalAnswers([]);
@@ -244,6 +453,28 @@ export default function AdminDashboard({ token, role }: AdminDashboardProps) {
       console.error(err);
     } finally {
       setModalLoading(false);
+    }
+  };
+
+  const handleDeleteTask = async (taskId: number) => {
+    if (!window.confirm("Are you sure you want to delete this task? This cannot be undone.")) return;
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.detail || "Failed to delete task");
+      }
+      alert("Task deleted successfully!");
+      // reload tasks
+      const tRes = await fetch('/api/tasks', { headers: { 'Authorization': `Bearer ${token}` } });
+      if (tRes.ok) setTasks(await tRes.json());
+    } catch (err: any) {
+      alert(err.message);
     }
   };
 
@@ -368,6 +599,8 @@ export default function AdminDashboard({ token, role }: AdminDashboardProps) {
     fetchQuestions();
     fetchPgConfig();
     fetchTasks();
+    fetchTemplates();
+    fetchSessionTypes();
   }, [token]);
 
   // Handle Notifications
@@ -466,30 +699,6 @@ export default function AdminDashboard({ token, role }: AdminDashboardProps) {
     }
   };
 
-  // BULK UPLOAD MOCK TRIGGERS
-  const triggerBulkPlaceholder = () => {
-    const list = [
-      { contact_name: "Tony Stark", company_name: "Stark Industries", phone: "1-800-IRONMAN", email: "tony@stark.com", address: "Malibu Cliff Estates, CA", country: "United States", zone: "West Coast", state: "California", city: "Malibu" },
-      { contact_name: "Bruce Wayne", company_name: "Wayne Enterprises", phone: "1-800-BATMAN", email: "bruce@wayne.com", address: "Gotham City Highway 1", country: "United States", zone: "Northeast", state: "New Jersey", city: "Gotham" },
-      { contact_name: "Peter Parker", company_name: "Daily Bugle", phone: "555-BUGLE", email: "peter.parker@dailybugle.org", address: "Queens, NY", country: "United States", zone: "Northeast", state: "New York", city: "New York City" }
-    ];
-
-    list.forEach(async (clObj) => {
-      await fetch('/api/clients', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(clObj)
-      });
-    });
-
-    setTimeout(() => {
-      triggerNote("Seeded 3 new commercial client accounts with geographic tags!");
-      fetchClients();
-    }, 800);
-  };
 
   // DELETE CLIENT
   const handleDeleteClient = async (clientId: number) => {
@@ -542,7 +751,8 @@ export default function AdminDashboard({ token, role }: AdminDashboardProps) {
           input_type: qType,
           options,
           is_required: qRequired,
-          is_active: true
+          is_active: true,
+          template_id: qTemplateId !== "" ? Number(qTemplateId) : null
         })
       });
 
@@ -1095,13 +1305,28 @@ export default function AdminDashboard({ token, role }: AdminDashboardProps) {
               <div className="grid grid-cols-2 gap-3.5 pt-1">
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">Country</label>
-                  <input
-                    type="text"
+                  <select
                     value={cCountry}
-                    onChange={(e) => setCCountry(e.target.value)}
+                    onChange={(e) => {
+                      const selectedCountryName = e.target.value;
+                      setCCountry(selectedCountryName);
+                      
+                      const countryObj = allCountries.find(c => c.name === selectedCountryName);
+                      const states = countryObj ? State.getStatesOfCountry(countryObj.isoCode) : [];
+                      const firstState = states[0]?.name || '';
+                      setCState(firstState);
+                      
+                      const stateObj = firstState ? states.find(s => s.name === firstState) : null;
+                      const cities = (countryObj && stateObj) ? City.getCitiesOfState(countryObj.isoCode, stateObj.isoCode) : [];
+                      setCCity(cities[0]?.name || '');
+                    }}
                     className="mt-1 block w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-emerald-505/10"
-                    placeholder="e.g. India"
-                  />
+                  >
+                    <option value="">Select Country</option>
+                    {allCountries.map(country => (
+                      <option key={country.isoCode} value={country.name}>{country.name}</option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">Zone / Region</label>
@@ -1118,23 +1343,38 @@ export default function AdminDashboard({ token, role }: AdminDashboardProps) {
               <div className="grid grid-cols-2 gap-3.5">
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">State / Province</label>
-                  <input
-                    type="text"
+                  <select
                     value={cState}
-                    onChange={(e) => setCState(e.target.value)}
+                    onChange={(e) => {
+                      const selectedStateName = e.target.value;
+                      setCState(selectedStateName);
+                      
+                      const stateObj = activeCountryStates.find(s => s.name === selectedStateName);
+                      const cities = (activeCountryObj && stateObj) ? City.getCitiesOfState(activeCountryObj.isoCode, stateObj.isoCode) : [];
+                      setCCity(cities[0]?.name || '');
+                    }}
                     className="mt-1 block w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-emerald-505/10"
-                    placeholder="e.g. Karnataka"
-                  />
+                    disabled={!cCountry}
+                  >
+                    <option value="">Select State</option>
+                    {activeCountryStates.map(state => (
+                      <option key={state.isoCode} value={state.name}>{state.name}</option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">City</label>
-                  <input
-                    type="text"
+                  <select
                     value={cCity}
                     onChange={(e) => setCCity(e.target.value)}
                     className="mt-1 block w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-emerald-505/10"
-                    placeholder="e.g. Bangalore"
-                  />
+                    disabled={!cState}
+                  >
+                    <option value="">Select City</option>
+                    {activeStateCities.map(city => (
+                      <option key={city.name} value={city.name}>{city.name}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
@@ -1180,14 +1420,6 @@ export default function AdminDashboard({ token, role }: AdminDashboardProps) {
                 </label>
               </div>
 
-              <button
-                type="button"
-                onClick={triggerBulkPlaceholder}
-                className="w-full flex items-center justify-center space-x-1.5 py-1.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-650 text-[10px] font-bold rounded border border-slate-200/60 transition-all uppercase tracking-wider"
-              >
-                <Sparkles className="h-3 w-3 text-emerald-600 animate-pulse" />
-                <span>Simulate Demo Seeds</span>
-              </button>
             </div>
           </div>
 
@@ -1281,170 +1513,512 @@ export default function AdminDashboard({ token, role }: AdminDashboardProps) {
 
       {/* RENDER - TAB 3: DYNAMIC FORM BUILDER */}
       {activeTab === 'form-builder' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* BUILD QUESTION CONTROL */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col space-y-4 h-fit">
-            <h3 className="text-lg font-bold text-slate-900 border-b border-slate-150 pb-3 flex items-center space-x-2">
-              <ClipboardType className="h-5 w-5 text-emerald-600" />
-              <span>Define Question Field</span>
-            </h3>
+        <div className="flex flex-col space-y-6">
+          {/* Sub Tab Navigation */}
+          <div className="bg-slate-150/60 p-1 rounded-xl flex space-x-1 max-w-xl self-start border border-slate-200">
+            <button
+              onClick={() => setFormBuilderSubTab('templates')}
+              className={`flex-1 py-2 px-4 rounded-lg text-xs font-bold transition-all flex items-center justify-center space-x-1.5 whitespace-nowrap cursor-pointer ${
+                formBuilderSubTab === 'templates'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-900'
+              }`}
+            >
+              <FileText className="h-3.5 w-3.5" />
+              <span>1. Questionnaire Templates</span>
+            </button>
+            <button
+              onClick={() => setFormBuilderSubTab('session-types')}
+              className={`flex-1 py-2 px-4 rounded-lg text-xs font-bold transition-all flex items-center justify-center space-x-1.5 whitespace-nowrap cursor-pointer ${
+                formBuilderSubTab === 'session-types'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-900'
+              }`}
+            >
+              <Layers className="h-3.5 w-3.5" />
+              <span>2. Field Session Types</span>
+            </button>
+            <button
+              onClick={() => setFormBuilderSubTab('questions')}
+              className={`flex-1 py-2 px-4 rounded-lg text-xs font-bold transition-all flex items-center justify-center space-x-1.5 whitespace-nowrap cursor-pointer ${
+                formBuilderSubTab === 'questions'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-900'
+              }`}
+            >
+              <ClipboardType className="h-3.5 w-3.5" />
+              <span>3. Question Fields</span>
+            </button>
+          </div>
 
-            <form onSubmit={handleCreateQuestion} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Question Label</label>
-                <input
-                  type="text"
-                  required
-                  value={qText}
-                  onChange={(e) => setQText(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"
-                  placeholder="e.g. Client's principal bottleneck?"
-                />
+          {/* Sub Tab 1: Questionnaire Templates */}
+          {formBuilderSubTab === 'templates' && (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fade-in">
+              <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col space-y-4 h-fit">
+                <h3 className="text-lg font-bold text-slate-900 border-b border-slate-150 pb-3 flex items-center space-x-2">
+                  <FileText className="h-5 w-5 text-emerald-600" />
+                  <span>{editingTemplate ? "Modify Template" : "New Questionnaire Template"}</span>
+                </h3>
+
+                <form onSubmit={editingTemplate ? handleEditTemplate : handleCreateTemplate} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Template Name</label>
+                    <input
+                      type="text"
+                      required
+                      value={editingTemplate ? editingTemplate.name : newTemplateName}
+                      onChange={(e) => editingTemplate 
+                        ? setEditingTemplate({ ...editingTemplate, name: e.target.value })
+                        : setNewTemplateName(e.target.value)
+                      }
+                      className="mt-1 block w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"
+                      placeholder="e.g. Technical Field Audit"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Description</label>
+                    <textarea
+                      rows={3}
+                      value={editingTemplate ? (editingTemplate.description || '') : newTemplateDescription}
+                      onChange={(e) => editingTemplate
+                        ? setEditingTemplate({ ...editingTemplate, description: e.target.value })
+                        : setNewTemplateDescription(e.target.value)
+                      }
+                      className="mt-1 block w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"
+                      placeholder="e.g. Standard compliance check questionnaire for retail clients."
+                    />
+                  </div>
+
+                  <div className="flex space-x-2 pt-2">
+                    {editingTemplate && (
+                      <button
+                        type="button"
+                        onClick={() => setEditingTemplate(null)}
+                        className="flex-1 py-2 px-4 rounded-lg border border-slate-200 text-slate-600 font-medium text-xs hover:bg-slate-50 transition"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                    <button
+                      type="submit"
+                      className="flex-1 flex items-center justify-center space-x-2 py-2.5 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs transition cursor-pointer"
+                    >
+                      {editingTemplate ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                      <span>{editingTemplate ? "Save Changes" : "Create Template"}</span>
+                    </button>
+                  </div>
+                </form>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Input Field Type</label>
-                <select
-                  value={qType}
-                  onChange={(e) => setQType(e.target.value as InputType)}
-                  className="mt-1 block w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"
-                >
-                  <option value="text">Paragraph Answer</option>
-                  <option value="number">Numeric Counter</option>
-                  <option value="dropdown">Dropdown List Selector</option>
-                  <option value="checkbox">Checkbox (Multiple options)</option>
-                  <option value="radio">Radio Buttons (Exclusive options)</option>
-                  <option value="datetime">Timestamp / Date Time picker</option>
-                </select>
+              <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col space-y-4">
+                <h3 className="text-lg font-bold text-slate-900 pb-3 border-b border-slate-100">
+                  <span>Questionnaire Templates Registry</span>
+                </h3>
+
+                <div className="space-y-3">
+                  {templates.map((tpl) => {
+                    const associatedQuestions = questions.filter(q => q.template_id === tpl.id);
+                    const associatedSessions = sessionTypes.filter(st => st.template_id === tpl.id);
+                    return (
+                      <div key={tpl.id} className="p-4 rounded-xl border border-slate-100 bg-slate-50/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div className="flex-1 min-w-0">
+                          <h4 className="text-sm font-bold text-slate-800 break-words">{tpl.name}</h4>
+                          <p className="text-xs text-slate-500 mt-1">{tpl.description || "No description provided."}</p>
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            <span className="text-[10px] bg-slate-100 text-slate-600 font-semibold px-2 py-0.5 rounded-full">
+                              📝 {associatedQuestions.length} Questions
+                            </span>
+                            {associatedSessions.map(st => (
+                              <span key={st.id} className="text-[10px] bg-emerald-50 text-emerald-700 font-semibold px-2 py-0.5 rounded-full">
+                                {st.label}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center space-x-2 shrink-0 self-end sm:self-center">
+                          <button
+                            onClick={() => setEditingTemplate(tpl)}
+                            className="p-1 px-2.5 border border-slate-200 hover:bg-slate-50 rounded-md text-slate-600 hover:text-slate-800 transition text-xs font-semibold flex items-center space-x-1 cursor-pointer"
+                          >
+                            <Edit className="h-3 w-3" />
+                            <span>Edit</span>
+                          </button>
+                          <button
+                            onClick={() => handleDeleteTemplate(tpl.id)}
+                            className="p-1 px-2.5 border border-rose-100 hover:bg-rose-50 rounded-md text-rose-500 hover:text-rose-700 transition cursor-pointer"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {templates.length === 0 && (
+                    <div className="p-8 text-center italic text-slate-400">
+                      No questionnaire templates configured yet. Create one on the left.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Sub Tab 2: Field Session Types */}
+          {formBuilderSubTab === 'session-types' && (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fade-in">
+              <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col space-y-4 h-fit">
+                <h3 className="text-lg font-bold text-slate-900 border-b border-slate-150 pb-3 flex items-center space-x-2">
+                  <Layers className="h-5 w-5 text-emerald-600" />
+                  <span>{editingSessionType ? "Modify Session Type" : "New Field Session Type"}</span>
+                </h3>
+
+                <form onSubmit={editingSessionType ? handleEditSessionType : handleCreateSessionType} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Session Code (Snake Case)</label>
+                    <input
+                      type="text"
+                      required
+                      value={editingSessionType ? editingSessionType.name : newSessionTypeName}
+                      onChange={(e) => editingSessionType
+                        ? setEditingSessionType({ ...editingSessionType, name: e.target.value })
+                        : setNewSessionTypeName(e.target.value)
+                      }
+                      className="mt-1 block w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"
+                      placeholder="e.g. audit_check"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Session Label (with Emoji)</label>
+                    <input
+                      type="text"
+                      required
+                      value={editingSessionType ? editingSessionType.label : newSessionTypeLabel}
+                      onChange={(e) => editingSessionType
+                        ? setEditingSessionType({ ...editingSessionType, label: e.target.value })
+                        : setNewSessionTypeLabel(e.target.value)
+                      }
+                      className="mt-1 block w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"
+                      placeholder="e.g. 📋 Compliance Audit"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Associate Questionnaire Template</label>
+                    <select
+                      value={editingSessionType ? (editingSessionType.template_id || '') : newSessionTypeTemplateId}
+                      onChange={(e) => editingSessionType
+                        ? setEditingSessionType({ ...editingSessionType, template_id: e.target.value ? Number(e.target.value) : null })
+                        : setNewSessionTypeTemplateId(e.target.value)
+                      }
+                      className="mt-1 block w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"
+                    >
+                      <option value="">-- No Questionnaire Template --</option>
+                      {templates.map(tpl => (
+                        <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="flex space-x-2 pt-2">
+                    {editingSessionType && (
+                      <button
+                        type="button"
+                        onClick={() => setEditingSessionType(null)}
+                        className="flex-1 py-2 px-4 rounded-lg border border-slate-200 text-slate-600 font-medium text-xs hover:bg-slate-50 transition"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                    <button
+                      type="submit"
+                      className="flex-1 flex items-center justify-center space-x-2 py-2.5 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs transition cursor-pointer"
+                    >
+                      {editingSessionType ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                      <span>{editingSessionType ? "Save Changes" : "Create Session Type"}</span>
+                    </button>
+                  </div>
+                </form>
               </div>
 
-              {["dropdown", "checkbox", "radio"].includes(qType) && (
-                <div className="p-3.5 bg-amber-50/50 border border-amber-100 rounded-xl space-y-2">
-                  <label className="block text-xs font-semibold text-slate-700">Selection Choice Values</label>
-                  <input
-                    type="text"
-                    required
-                    value={qOptionsRaw}
-                    onChange={(e) => setQOptionsRaw(e.target.value)}
-                    className="block w-full px-3 py-2 bg-white border border-slate-250 rounded-lg text-xs"
-                    placeholder="Choice A, Choice B, Choice C"
-                  />
-                  <p className="text-[10px] text-amber-805">
-                    Type a comma-separated list of choice possibilities above. Space pads are trimmed.
+              <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col space-y-4">
+                <h3 className="text-lg font-bold text-slate-900 pb-3 border-b border-slate-100">
+                  <span>Registered Field Session Types</span>
+                </h3>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-100 text-slate-400 text-[10px] font-bold uppercase tracking-wider">
+                        <th className="py-3 px-4">Code Name</th>
+                        <th className="py-3 px-4">Display Label</th>
+                        <th className="py-3 px-4">Associated Template</th>
+                        <th className="py-3 px-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {sessionTypes.map((st) => {
+                        const matchedTpl = templates.find(t => t.id === st.template_id);
+                        return (
+                          <tr key={st.id} className="text-slate-700 hover:bg-slate-50/50">
+                            <td className="py-3 px-4 font-mono text-xs">{st.name}</td>
+                            <td className="py-3 px-4 font-bold text-slate-800">{st.label}</td>
+                            <td className="py-3 px-4 text-xs">
+                              {matchedTpl ? (
+                                <span className="text-emerald-700 bg-emerald-50 px-2 py-1 rounded font-semibold border border-emerald-100">
+                                  {matchedTpl.name}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 italic">No template associated</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-right space-x-2">
+                              <button
+                                onClick={() => setEditingSessionType(st)}
+                                className="p-1 px-2.5 border border-slate-200 hover:bg-slate-50 rounded-md text-slate-600 hover:text-slate-800 transition text-xs font-semibold inline-flex items-center space-x-1 cursor-pointer"
+                              >
+                                <Edit className="h-3 w-3" />
+                                <span>Edit</span>
+                              </button>
+                              <button
+                                onClick={() => handleDeleteSessionType(st.id)}
+                                className="p-1 px-2.5 border border-rose-100 hover:bg-rose-50 rounded-md text-rose-500 hover:text-rose-700 transition cursor-pointer"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Sub Tab 3: Question Fields */}
+          {formBuilderSubTab === 'questions' && (
+            <div className="flex flex-col space-y-6 w-full">
+              {/* Template Selection Header Row */}
+              <div className="bg-slate-50 border border-slate-200 p-5 rounded-2xl shadow-sm flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                <div className="space-y-1">
+                  <h4 className="text-sm font-bold text-slate-805 flex items-center space-x-2">
+                    <FileText className="h-4 w-4 text-emerald-600" />
+                    <span>Select Questionnaire Template</span>
+                  </h4>
+                  <p className="text-xs text-slate-500">
+                    Choose a template below to filter existing questions and associate new ones with it automatically.
                   </p>
                 </div>
-              )}
-
-              <div className="flex items-center">
-                <input
-                  id="q-required-check"
-                  type="checkbox"
-                  checked={qRequired}
-                  onChange={(e) => setQRequired(e.target.checked)}
-                  className="h-4 w-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300"
-                />
-                <label htmlFor="q-required-check" className="ml-2.5 text-xs font-semibold text-slate-650 cursor-pointer select-none">
-                  Make this a Mandatory field (is_required)
-                </label>
+                <div className="w-full md:w-80 shrink-0">
+                  <select
+                    value={qTemplateId}
+                    onChange={(e) => setQTemplateId(e.target.value)}
+                    className="block w-full px-3 py-2 bg-white border border-slate-250 rounded-lg text-xs font-semibold text-slate-705 focus:ring-2 focus:ring-emerald-500/20 focus:outline-none"
+                  >
+                    <option value="">-- Global / No Template (Legacy) --</option>
+                    {templates.map(tpl => (
+                      <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
-              <button
-                id="admin-form-builder-submit"
-                type="submit"
-                className="w-full flex items-center justify-center space-x-2 py-2.5 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm transition"
-              >
-                <Plus className="h-4 w-4" />
-                <span>Append Question Field</span>
-              </button>
-            </form>
-          </div>
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fade-in">
+                {/* BUILD QUESTION CONTROL */}
+                <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col space-y-4 h-fit">
+                  <h3 className="text-sm font-bold text-slate-900 border-b border-slate-150 pb-3 flex items-center space-x-2">
+                    <ClipboardType className="h-5 w-5 text-emerald-600" />
+                    <span>Define Question Field</span>
+                  </h3>
 
-          {/* QUESTIONS LIST STATUS COGNIZANT */}
-          <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col space-y-4">
-            <h3 className="text-lg font-bold text-slate-900 pb-3 border-b border-slate-100 flex items-center justify-between">
-              <span>Configured Dynamic Questionnaire</span>
-              <span className="text-xs px-2.5 py-1 bg-slate-50 border rounded-full text-slate-500 font-medium">
-                {questions.filter(q => q.is_active).length} Active / {questions.length} Total
-              </span>
-            </h3>
-
-            <div className="space-y-3">
-              {questions.map((q) => (
-                <div 
-                  key={q.id} 
-                  className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all ${
-                    q.is_active 
-                      ? 'border-slate-100 bg-slate-50/20' 
-                      : 'border-slate-150 bg-slate-100/30 opacity-75'
-                  }`}
-                >
-                  <div className="flex-1 min-w-0 flex flex-col space-y-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xs font-mono font-bold text-slate-400">Q#{q.id}</span>
-                      <span className="text-sm font-bold text-slate-800 break-words">{q.question_text}</span>
-                      {q.is_required && (
-                        <span className="text-[9px] bg-rose-100/80 text-rose-700 font-bold px-1.5 py-0.5 rounded uppercase">
-                          Mandatory
-                        </span>
-                      )}
-                      {!q.is_active && (
-                        <span className="text-[9px] bg-slate-100 border text-slate-500 px-1.5 py-0.5 rounded font-bold uppercase">
-                          Deactivated
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex flex-col sm:flex-row sm:items-start gap-2 text-xs text-slate-500 mt-1">
-                      <span className="bg-slate-100 rounded px-2 py-0.5 text-[10px] uppercase font-bold text-slate-600 shrink-0 self-start">
-                        Style: {q.input_type}
-                      </span>
-                      {q.options && q.options.length > 0 && (
-                        <div className="flex flex-wrap gap-1 items-center min-w-0">
-                          <span className="text-[11px] text-slate-400 font-medium shrink-0">Choices:</span>
-                          {q.options.map((opt, idx) => (
-                            <span 
-                              key={idx} 
-                              className="bg-slate-50 px-2 py-0.5 text-[10px] text-slate-605 border border-slate-150 rounded font-medium max-w-[150px] truncate"
-                              title={opt}
-                            >
-                              {opt}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                  <div className="p-3 bg-emerald-50/50 border border-emerald-100 rounded-xl">
+                    <span className="text-[10px] font-semibold text-emerald-600 uppercase tracking-wider block">Targeting Template</span>
+                    <span className="text-xs font-bold text-emerald-900">
+                      {qTemplateId !== "" ? (templates.find(t => t.id.toString() === qTemplateId)?.name || "Unknown Template") : "Global / No Template (Legacy)"}
+                    </span>
                   </div>
 
-                  <div className="flex items-center space-x-2 shrink-0 self-end sm:self-center">
-                    <button
-                      onClick={() => handleToggleQuestion(q)}
-                      className={`flex items-center space-x-1 p-1 px-3.5 rounded-lg border text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                        q.is_active 
-                          ? 'border-emerald-150 text-emerald-600 hover:bg-emerald-50 bg-emerald-50/20' 
-                          : 'border-slate-200 text-slate-500 hover:bg-slate-100'
-                      }`}
-                    >
-                      {q.is_active ? "Active" : "Archived (Inactive)"}
-                    </button>
+                  <form onSubmit={handleCreateQuestion} className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Question Label</label>
+                      <input
+                        type="text"
+                        required
+                        value={qText}
+                        onChange={(e) => setQText(e.target.value)}
+                        className="mt-1 block w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500/10 focus:border-emerald-550 focus:outline-none"
+                        placeholder="e.g. Client's principal bottleneck?"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Input Field Type</label>
+                      <select
+                        value={qType}
+                        onChange={(e) => setQType(e.target.value as InputType)}
+                        className="mt-1 block w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500/10 focus:border-emerald-550 focus:outline-none"
+                      >
+                        <option value="text">Paragraph Answer</option>
+                        <option value="number">Numeric Counter</option>
+                        <option value="dropdown">Dropdown List Selector</option>
+                        <option value="checkbox">Checkbox (Multiple options)</option>
+                        <option value="radio">Radio Buttons (Exclusive options)</option>
+                        <option value="datetime">Timestamp / Date Time picker</option>
+                      </select>
+                    </div>
+
+                    {["dropdown", "checkbox", "radio"].includes(qType) && (
+                      <div className="p-3.5 bg-amber-50/50 border border-amber-100 rounded-xl space-y-2">
+                        <label className="block text-xs font-semibold text-slate-700">Selection Choice Values</label>
+                        <input
+                          type="text"
+                          required
+                          value={qOptionsRaw}
+                          onChange={(e) => setQOptionsRaw(e.target.value)}
+                          className="block w-full px-3 py-2 bg-white border border-slate-250 rounded-lg text-xs focus:ring-2 focus:ring-amber-500/10 focus:border-amber-500 focus:outline-none"
+                          placeholder="Choice A, Choice B, Choice C"
+                        />
+                        <p className="text-[10px] text-amber-805">
+                          Type a comma-separated list of choice possibilities above. Space pads are trimmed.
+                        </p>
+                      </div>
+                    )}
+
+                    <div className="flex items-center">
+                      <input
+                        id="q-required-check"
+                        type="checkbox"
+                        checked={qRequired}
+                        onChange={(e) => setQRequired(e.target.checked)}
+                        className="h-4 w-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300"
+                      />
+                      <label htmlFor="q-required-check" className="ml-2.5 text-xs font-semibold text-slate-650 cursor-pointer select-none">
+                        Make this a Mandatory field (is_required)
+                      </label>
+                    </div>
 
                     <button
-                      onClick={() => handleDeleteQuestion(q.id)}
-                      className="p-1 px-2 border border-rose-100 hover:bg-rose-50 rounded-md text-rose-500 hover:text-rose-700 transition cursor-pointer shrink-0"
-                      title="Permanently Delete Question"
+                      id="admin-form-builder-submit"
+                      type="submit"
+                      className="w-full flex items-center justify-center space-x-2 py-2.5 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs tracking-wide transition cursor-pointer"
                     >
-                      <Trash2 className="h-4 w-4" />
+                      <Plus className="h-4 w-4" />
+                      <span>Append Question Field</span>
                     </button>
+                  </form>
+                </div>
+
+                {/* QUESTIONS LIST STATUS COGNIZANT */}
+                <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col space-y-4">
+                  <h3 className="text-sm font-bold text-slate-900 pb-3 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <span>Configured Dynamic Questionnaire</span>
+                    <span className="text-xs px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-150 rounded-full font-semibold">
+                      {questions.filter(q => {
+                        const matchesTpl = qTemplateId === "" ? (q.template_id === null || q.template_id === undefined) : (q.template_id?.toString() === qTemplateId);
+                        return matchesTpl && q.is_active;
+                      }).length} Active / {questions.filter(q => qTemplateId === "" ? (q.template_id === null || q.template_id === undefined) : (q.template_id?.toString() === qTemplateId)).length} Total for selected
+                    </span>
+                  </h3>
+
+                  <div className="space-y-3">
+                    {questions
+                      .filter(q => {
+                        if (qTemplateId === "") {
+                          return q.template_id === null || q.template_id === undefined;
+                        }
+                        return q.template_id?.toString() === qTemplateId;
+                      })
+                      .map((q) => {
+                        const matchedTpl = templates.find(t => t.id === q.template_id);
+                        return (
+                          <div 
+                            key={q.id} 
+                            className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all ${
+                              q.is_active 
+                                ? 'border-slate-100 bg-slate-50/20' 
+                                : 'border-slate-150 bg-slate-100/30 opacity-75'
+                            }`}
+                          >
+                            <div className="flex-1 min-w-0 flex flex-col space-y-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-xs font-mono font-bold text-slate-400">Q#{q.id}</span>
+                                <span className="text-sm font-bold text-slate-800 break-words">{q.question_text}</span>
+                                {q.is_required && (
+                                  <span className="text-[9px] bg-rose-100/80 text-rose-700 font-bold px-1.5 py-0.5 rounded uppercase">
+                                    Mandatory
+                                  </span>
+                                )}
+                                {matchedTpl && (
+                                  <span className="text-[9px] bg-emerald-55 border border-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold uppercase">
+                                    {matchedTpl.name}
+                                  </span>
+                                )}
+                                {!q.is_active && (
+                                  <span className="text-[9px] bg-slate-100 border text-slate-500 px-1.5 py-0.5 rounded font-bold uppercase">
+                                    Deactivated
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="flex flex-col sm:flex-row sm:items-start gap-2 text-xs text-slate-500 mt-1">
+                                <span className="bg-slate-100 rounded px-2 py-0.5 text-[10px] uppercase font-bold text-slate-600 shrink-0 self-start">
+                                  Style: {q.input_type}
+                                </span>
+                                {q.options && q.options.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 items-center min-w-0">
+                                    <span className="text-[11px] text-slate-400 font-medium shrink-0">Choices:</span>
+                                    {q.options.map((opt, idx) => (
+                                      <span 
+                                        key={idx} 
+                                        className="bg-slate-50 px-2 py-0.5 text-[10px] text-slate-605 border border-slate-150 rounded font-medium max-w-[150px] truncate"
+                                        title={opt}
+                                      >
+                                        {opt}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center space-x-2 shrink-0 self-end sm:self-center">
+                              <button
+                                onClick={() => handleToggleQuestion(q)}
+                                className={`flex items-center space-x-1 p-1 px-3.5 rounded-lg border text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                                  q.is_active 
+                                    ? 'border-emerald-150 text-emerald-600 hover:bg-emerald-50 bg-emerald-50/20' 
+                                    : 'border-slate-200 text-slate-500 hover:bg-slate-100'
+                                }`}
+                              >
+                                {q.is_active ? "Active" : "Archived (Inactive)"}
+                              </button>
+
+                              <button
+                                onClick={() => handleDeleteQuestion(q.id)}
+                                className="p-1 px-2 border border-rose-100 hover:bg-rose-50 rounded-md text-rose-500 hover:text-rose-700 transition cursor-pointer shrink-0"
+                                title="Permanently Delete Question"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                    {questions.filter(q => qTemplateId === "" ? (q.template_id === null || q.template_id === undefined) : (q.template_id?.toString() === qTemplateId)).length === 0 && (
+                      <div className="p-8 text-center italic text-slate-400">
+                        No dynamic form fields configured yet for this template. Create some on the left.
+                      </div>
+                    )}
                   </div>
                 </div>
-              ))}
-
-              {questions.length === 0 && (
-                <div className="p-8 text-center italic text-slate-400">
-                  No dynamic form fields configured yet in the database registry. Create some above.
-                </div>
-              )}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
 
@@ -1675,7 +2249,7 @@ export default function AdminDashboard({ token, role }: AdminDashboardProps) {
                   type="date"
                   value={rptStartDate}
                   onChange={(e) => setRptStartDate(e.target.value)}
-                  className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-205 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium text-slate-700"
+                  className="w-full max-w-xs md:max-w-none text-xs px-3 py-2 bg-slate-50 border border-slate-205 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium text-slate-700"
                 />
               </div>
 
@@ -1685,7 +2259,7 @@ export default function AdminDashboard({ token, role }: AdminDashboardProps) {
                   type="date"
                   value={rptEndDate}
                   onChange={(e) => setRptEndDate(e.target.value)}
-                  className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-205 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium text-slate-700"
+                  className="w-full max-w-xs md:max-w-none text-xs px-3 py-2 bg-slate-50 border border-slate-205 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium text-slate-700"
                 />
               </div>
 
@@ -1917,16 +2491,25 @@ export default function AdminDashboard({ token, role }: AdminDashboardProps) {
                           </span>
                         </td>
                         <td className="px-4 py-3 text-right text-xs">
-                          {task.status === 'completed' ? (
+                          <div className="flex items-center justify-end space-x-2">
+                            {task.status === 'completed' ? (
+                              <button
+                                onClick={() => handleViewAnswers(task)}
+                                className="px-3 py-1.5 bg-emerald-50 text-emerald-700 font-bold border border-emerald-202 hover:bg-emerald-100 rounded-lg transition"
+                              >
+                                View Report
+                              </button>
+                            ) : (
+                              <span className="text-slate-400 italic">Pending completion</span>
+                            )}
                             <button
-                              onClick={() => handleViewAnswers(task)}
-                              className="px-3 py-1.5 bg-emerald-50 text-emerald-700 font-bold border border-emerald-202 hover:bg-emerald-100 rounded-lg transition"
+                              onClick={() => handleDeleteTask(task.id)}
+                              className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 rounded-lg transition"
+                              title="Delete Task"
                             >
-                              View Submission Report
+                              <Trash2 className="h-3.5 w-3.5" />
                             </button>
-                          ) : (
-                            <span className="text-slate-400 italic">No report filed</span>
-                          )}
+                          </div>
                         </td>
                       </tr>
                     ))}

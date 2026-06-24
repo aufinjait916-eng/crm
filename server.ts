@@ -182,7 +182,7 @@ async function startServer() {
   });
 
   app.post("/api/admin/forms", authenticateToken, requireRole(["admin", "management"]), (req: Request, res: Response): void => {
-    const { question_text, input_type, options, is_required, is_active } = req.body;
+    const { question_text, input_type, options, is_required, is_active, session_type_id, template_id } = req.body;
 
     if (!question_text || !input_type) {
       res.status(400).json({ detail: "Question text and input type are required options" });
@@ -196,7 +196,9 @@ async function startServer() {
       input_type,
       options: options || null,
       is_required: is_required ?? false,
-      is_active: is_active ?? true
+      is_active: is_active ?? true,
+      session_type_id: session_type_id !== undefined && session_type_id !== "" ? Number(session_type_id) : null,
+      template_id: template_id !== undefined && template_id !== "" ? (template_id !== null ? Number(template_id) : null) : null
     };
 
     db.form_questions.push(newQuestion);
@@ -208,7 +210,7 @@ async function startServer() {
   // Edit / Toggle is_active or update form field details
   app.put("/api/admin/forms/:id", authenticateToken, requireRole(["admin", "management"]), (req: Request, res: Response): void => {
     const qId = Number(req.params.id);
-    const { question_text, input_type, options, is_required, is_active } = req.body;
+    const { question_text, input_type, options, is_required, is_active, session_type_id, template_id } = req.body;
 
     const db = getDb();
     const questionIndex = db.form_questions.findIndex(q => q.id === qId);
@@ -225,7 +227,9 @@ async function startServer() {
       input_type: input_type !== undefined ? input_type : existing.input_type,
       options: options !== undefined ? options : existing.options,
       is_required: is_required !== undefined ? is_required : existing.is_required,
-      is_active: is_active !== undefined ? is_active : existing.is_active
+      is_active: is_active !== undefined ? is_active : existing.is_active,
+      session_type_id: session_type_id !== undefined ? (session_type_id !== "" && session_type_id !== null ? Number(session_type_id) : null) : existing.session_type_id,
+      template_id: template_id !== undefined ? (template_id !== "" && template_id !== null ? Number(template_id) : null) : existing.template_id
     };
 
     db.form_questions[questionIndex] = updated;
@@ -250,6 +254,163 @@ async function startServer() {
     saveDb(db);
 
     res.json({ message: "Dynamic question field deleted successfully" });
+  });
+
+  // --- SESSION TYPES ENDPOINTS ---
+  app.get("/api/session-types", authenticateToken, (req: Request, res: Response): void => {
+    const db = getDb();
+    res.json(db.session_types || []);
+  });
+
+  app.post("/api/session-types", authenticateToken, requireRole(["admin", "management"]), (req: Request, res: Response): void => {
+    const { name, label, template_id } = req.body;
+    if (!name || !label) {
+      res.status(400).json({ detail: "Session type name and label are required" });
+      return;
+    }
+
+    const db = getDb();
+    if (!db.session_types) db.session_types = [];
+
+    const exists = db.session_types.some(st => st.name.toLowerCase() === name.toLowerCase());
+    if (exists) {
+      res.status(400).json({ detail: "A session type with this name already exists" });
+      return;
+    }
+
+    const newType = {
+      id: db.session_types.length > 0 ? Math.max(...db.session_types.map(st => st.id)) + 1 : 1,
+      name: name.toLowerCase().replace(/\s+/g, '_'),
+      label,
+      template_id: template_id !== undefined && template_id !== "" ? (template_id !== null ? Number(template_id) : null) : null
+    };
+
+    db.session_types.push(newType);
+    saveDb(db);
+    res.status(201).json(newType);
+  });
+
+  app.put("/api/session-types/:id", authenticateToken, requireRole(["admin", "management"]), (req: Request, res: Response): void => {
+    const id = Number(req.params.id);
+    const { name, label, template_id } = req.body;
+
+    const db = getDb();
+    if (!db.session_types) db.session_types = [];
+
+    const item = db.session_types.find(st => st.id === id);
+    if (!item) {
+      res.status(404).json({ detail: "Session type not found" });
+      return;
+    }
+
+    if (name !== undefined) item.name = name.toLowerCase().replace(/\s+/g, '_');
+    if (label !== undefined) item.label = label;
+    if (template_id !== undefined) item.template_id = template_id !== "" ? (template_id !== null ? Number(template_id) : null) : null;
+
+    saveDb(db);
+    res.json(item);
+  });
+
+  app.delete("/api/session-types/:id", authenticateToken, requireRole(["admin", "management"]), (req: Request, res: Response): void => {
+    const id = Number(req.params.id);
+    const db = getDb();
+    if (!db.session_types) db.session_types = [];
+
+    const index = db.session_types.findIndex(st => st.id === id);
+    if (index === -1) {
+      res.status(404).json({ detail: "Session type not found" });
+      return;
+    }
+
+    db.form_questions.forEach(q => {
+      if (q.session_type_id === id) {
+        q.session_type_id = null;
+      }
+    });
+
+    db.session_types.splice(index, 1);
+    saveDb(db);
+    res.status(204).end();
+  });
+
+  // --- QUESTIONNAIRE TEMPLATES ENDPOINTS ---
+  app.get("/api/templates", authenticateToken, (req: Request, res: Response): void => {
+    const db = getDb();
+    res.json(db.questionnaire_templates || []);
+  });
+
+  app.post("/api/templates", authenticateToken, requireRole(["admin", "management"]), (req: Request, res: Response): void => {
+    const { name, description } = req.body;
+    if (!name) {
+      res.status(400).json({ detail: "Template name is required" });
+      return;
+    }
+
+    const db = getDb();
+    if (!db.questionnaire_templates) db.questionnaire_templates = [];
+
+    const newTemplate = {
+      id: db.questionnaire_templates.length > 0 ? Math.max(...db.questionnaire_templates.map(t => t.id)) + 1 : 1,
+      name,
+      description: description || ""
+    };
+
+    db.questionnaire_templates.push(newTemplate);
+    saveDb(db);
+    res.status(201).json(newTemplate);
+  });
+
+  app.put("/api/templates/:id", authenticateToken, requireRole(["admin", "management"]), (req: Request, res: Response): void => {
+    const id = Number(req.params.id);
+    const { name, description } = req.body;
+
+    const db = getDb();
+    if (!db.questionnaire_templates) db.questionnaire_templates = [];
+
+    const item = db.questionnaire_templates.find(t => t.id === id);
+    if (!item) {
+      res.status(404).json({ detail: "Template not found" });
+      return;
+    }
+
+    if (name !== undefined) item.name = name;
+    if (description !== undefined) item.description = description;
+
+    saveDb(db);
+    res.json(item);
+  });
+
+  app.delete("/api/templates/:id", authenticateToken, requireRole(["admin", "management"]), (req: Request, res: Response): void => {
+    const id = Number(req.params.id);
+    const db = getDb();
+    if (!db.questionnaire_templates) db.questionnaire_templates = [];
+
+    const index = db.questionnaire_templates.findIndex(t => t.id === id);
+    if (index === -1) {
+      res.status(404).json({ detail: "Template not found" });
+      return;
+    }
+
+    // Unassign this template from any session types or questions
+    if (db.session_types) {
+      db.session_types.forEach(st => {
+        if (st.template_id === id) {
+          st.template_id = null;
+        }
+      });
+    }
+
+    if (db.form_questions) {
+      db.form_questions.forEach(q => {
+        if (q.template_id === id) {
+          q.template_id = null;
+        }
+      });
+    }
+
+    db.questionnaire_templates.splice(index, 1);
+    saveDb(db);
+    res.status(204).end();
   });
 
   // --- POSTGRES SERVER CONNECTION ENDPOINTS ---
@@ -486,11 +647,8 @@ async function startServer() {
       }
     }
 
-    // Calculate end time: 45 mins for physical visit, 15 mins for pitch phone call by default.
-    const startObj = new Date(scheduled_at);
-    const durationMinutes = task_type === "visit" ? 45 : 15;
-    const endObj = new Date(startObj.getTime() + durationMinutes * 60 * 1000);
-    const scheduled_end_at = endObj.toISOString();
+    // Set end time same as start time to remove default 15m/45m duration
+    const scheduled_end_at = scheduled_at;
 
     const newTask = {
       id: db.tasks.length > 0 ? Math.max(...db.tasks.map(t => t.id)) + 1 : 1,
@@ -510,6 +668,75 @@ async function startServer() {
     saveDb(db);
 
     res.status(201).json(newTask);
+  });
+
+  // Edit Task endpoint
+  app.put("/api/tasks/:id", authenticateToken, (req: Request, res: Response): void => {
+    const user = (req as any).user;
+    const taskId = Number(req.params.id);
+    const { client_id, assigned_to, task_type, scheduled_at, comments, status } = req.body;
+
+    const db = getDb();
+    const task = db.tasks.find(t => t.id === taskId);
+    if (!task) {
+      res.status(404).json({ detail: "Task not found" });
+      return;
+    }
+
+    // Auth verification: user who created, manager, or management officer
+    const isCreator = task.assigned_by === user.id;
+    const isPrivileged = ["manager", "management", "admin"].includes(user.role);
+    if (!isCreator && !isPrivileged) {
+      res.status(403).json({ detail: "Forbidden: You are not authorized to edit this task" });
+      return;
+    }
+
+    if (client_id !== undefined) task.client_id = Number(client_id);
+    if (assigned_to !== undefined) task.assigned_to = Number(assigned_to);
+    if (task_type !== undefined) task.task_type = task_type;
+    if (scheduled_at !== undefined) {
+      task.scheduled_at = scheduled_at;
+      task.scheduled_end_at = scheduled_at; // end time equal to start time (duration removed)
+    }
+    if (comments !== undefined) task.comments = comments ? String(comments) : null;
+    if (status !== undefined) {
+      task.status = status;
+      if (status === "completed" && !task.completed_at) {
+        task.completed_at = new Date().toISOString();
+      } else if (status === "pending") {
+        task.completed_at = null;
+      }
+    }
+
+    saveDb(db);
+    res.json(task);
+  });
+
+  // Delete Task endpoint
+  app.delete("/api/tasks/:id", authenticateToken, (req: Request, res: Response): void => {
+    const user = (req as any).user;
+    const taskId = Number(req.params.id);
+
+    const db = getDb();
+    const task = db.tasks.find(t => t.id === taskId);
+    if (!task) {
+      res.status(404).json({ detail: "Task not found" });
+      return;
+    }
+
+    // Auth verification: user who created, manager, or management officer
+    const isCreator = task.assigned_by === user.id;
+    const isPrivileged = ["manager", "management", "admin"].includes(user.role);
+    if (!isCreator && !isPrivileged) {
+      res.status(403).json({ detail: "Forbidden: You are not authorized to delete this task" });
+      return;
+    }
+
+    db.tasks = db.tasks.filter(t => t.id !== taskId);
+    db.task_submissions = db.task_submissions.filter(ts => ts.task_id !== taskId);
+
+    saveDb(db);
+    res.status(204).end();
   });
 
   // Save or update comments on a task (for closure or follow up notes)

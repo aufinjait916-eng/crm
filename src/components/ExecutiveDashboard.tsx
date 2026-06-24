@@ -41,6 +41,7 @@ export default function ExecutiveDashboard({ token, userId }: ExecutiveDashboard
   const [followUpComments, setFollowUpComments] = useState('');
 
   // Location States
+  const [sessionTypes, setSessionTypes] = useState<any[]>([]);
   const [latitude, setLatitude] = useState<number | null>(null);
   const [longitude, setLongitude] = useState<number | null>(null);
   const [isCapturingLocation, setIsCapturingLocation] = useState(false);
@@ -95,10 +96,18 @@ export default function ExecutiveDashboard({ token, userId }: ExecutiveDashboard
     } catch (e) { console.error(e); }
   };
 
+  const fetchSessionTypes = async () => {
+    try {
+      const res = await fetch('/api/session-types', { headers: { 'Authorization': `Bearer ${token}` } });
+      if (res.ok) setSessionTypes(await res.json());
+    } catch (e) { console.error(e); }
+  };
+
   useEffect(() => {
     fetchTasks();
     fetchClients();
     fetchQuestions();
+    fetchSessionTypes();
   }, [token]);
 
   useEffect(() => {
@@ -425,11 +434,11 @@ export default function ExecutiveDashboard({ token, userId }: ExecutiveDashboard
 
   const getTaskDurationDisplay = (task: Task) => {
     const start = new Date(task.scheduled_at);
-    const end = task.scheduled_end_at 
-      ? new Date(task.scheduled_end_at) 
-      : new Date(start.getTime() + (task.task_type === 'visit' ? 45 : 15) * 60 * 1000);
-    
-    return `${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (${task.task_type === 'visit' ? '45m' : '15m'})`;
+    if (!task.scheduled_end_at || task.scheduled_end_at === task.scheduled_at) {
+      return `${start.toLocaleDateString()} ${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    }
+    const end = new Date(task.scheduled_end_at);
+    return `${start.toLocaleDateString()} ${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
   };
 
   return (
@@ -1104,12 +1113,24 @@ export default function ExecutiveDashboard({ token, userId }: ExecutiveDashboard
                 </div>
 
                 {/* RENDER DYNAMIC FORM WITH ANSWERS IF EDITING RECALIBRATES PRESETS */}
-                <DynamicFormRenderer
-                  questions={questions}
-                  onSubmit={handleCompleteTaskWithAnswers}
-                  loading={submitLoading}
-                  initialAnswers={editAnswers}
-                />
+                {(() => {
+                  const activeSessionType = sessionTypes.find(st => st.name === activeTaskForForm.task_type);
+                  const filteredQuestions = questions.filter(q => {
+                    if (activeSessionType && activeSessionType.template_id) {
+                      return q.template_id === activeSessionType.template_id;
+                    }
+                    if (!q.session_type_id) return true;
+                    return q.session_type_id === activeSessionType?.id;
+                  });
+                  return (
+                    <DynamicFormRenderer
+                      questions={filteredQuestions}
+                      onSubmit={handleCompleteTaskWithAnswers}
+                      loading={submitLoading}
+                      initialAnswers={editAnswers}
+                    />
+                  );
+                })()}
               </div>
             )}
           </div>
