@@ -22,6 +22,9 @@ export default function DynamicFormRenderer({ questions, onSubmit, loading = fal
   });
   const [error, setError] = useState<string | null>(null);
 
+  const questionsKey = (questions || []).map(q => q.id).join(',');
+  const initialAnswersKey = (initialAnswers || []).map(ia => `${ia.question_id}:${ia.answer_value}`).join(',');
+
   React.useEffect(() => {
     if (initialAnswers && initialAnswers.length > 0) {
       const initial: Record<number, string> = {};
@@ -32,7 +35,7 @@ export default function DynamicFormRenderer({ questions, onSubmit, loading = fal
     } else {
       setFormState({});
     }
-  }, [initialAnswers, questions]);
+  }, [initialAnswersKey, questionsKey]);
 
   const handleInputChange = (questionId: number, value: string) => {
     setFormState(prev => ({

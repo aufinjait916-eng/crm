@@ -776,6 +776,18 @@ async function startServer() {
       return;
     }
 
+    // Block completion of future scheduled tasks
+    if (task.scheduled_at) {
+      const taskDate = new Date(task.scheduled_at);
+      const today = new Date();
+      const taskDateMidnight = new Date(taskDate.getFullYear(), taskDate.getMonth(), taskDate.getDate());
+      const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      if (taskDateMidnight > todayMidnight) {
+        res.status(400).json({ detail: "Forbidden: You cannot complete tasks scheduled for future dates." });
+        return;
+      }
+    }
+
     // Authorization: Must be assigned to this task
     if (task.assigned_to !== user.id) {
       res.status(403).json({ detail: "Forbidden: You cannot submit entries for tasks assigned to other executives" });

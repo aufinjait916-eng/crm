@@ -74,6 +74,15 @@ export default function ExecutiveDashboard({ token, userId }: ExecutiveDashboard
     }
   };
 
+  const isFutureTask = (task: Task) => {
+    if (!task || !task.scheduled_at) return false;
+    const taskDate = new Date(task.scheduled_at);
+    const today = new Date();
+    const taskDateMidnight = new Date(taskDate.getFullYear(), taskDate.getMonth(), taskDate.getDate());
+    const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    return taskDateMidnight > todayMidnight;
+  };
+
   // LOAD SERVICES
   const fetchTasks = async () => {
     try {
@@ -694,6 +703,10 @@ export default function ExecutiveDashboard({ token, userId }: ExecutiveDashboard
                     <button
                       id={`exec-complete-task-${task.id}`}
                       onClick={() => {
+                        if (isFutureTask(task)) {
+                          triggerNotify("The task assigned on a future date cannot be completed now.", true);
+                          return;
+                        }
                         setEditAnswers([]);
                         setAudioUrl(task.voice_url || null);
                         setVoiceSavedNote(!!task.voice_url);

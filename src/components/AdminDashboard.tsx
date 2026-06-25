@@ -4,7 +4,7 @@ import { User, Client, FormQuestion, UserRole, InputType, Task } from '../types'
 import { 
   Users, UserPlus, ClipboardType, Briefcase, Plus, Search, 
   Trash2, ToggleLeft, ToggleRight, Check, CheckCircle2, CloudUpload, Sparkles, Building, MapPin, Download, Upload,
-  Database, Settings, Menu, ChevronLeft, ChevronRight, Volume2, Calendar, ClipboardCheck, Clock, User as UserIcon, AlertCircle,
+  Database, Settings, Menu, ChevronLeft, ChevronRight, Volume2, Calendar, CalendarPlus, ClipboardCheck, Clock, User as UserIcon, AlertCircle,
   Edit, FileText, Layers
 } from 'lucide-react';
 import { LOCATION_DATA } from '../utils/locationData';
@@ -34,6 +34,13 @@ export default function AdminDashboard({ token, role }: AdminDashboardProps) {
   const [clients, setClients] = useState<Client[]>([]);
   const [questions, setQuestions] = useState<FormQuestion[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
+
+  // Task Assignment states (Admin / Management)
+  const [targetClientId, setTargetClientId] = useState('');
+  const [targetUserId, setTargetUserId] = useState('');
+  const [targetTaskType, setTargetTaskType] = useState('call');
+  const [targetScheduledAt, setTargetScheduledAt] = useState('');
+  const [assignLoading, setAssignLoading] = useState(false);
 
   // Calendars / Tasks sync states
   const [selectedUserFilter, setSelectedUserFilter] = useState<string>('all');
@@ -611,6 +618,45 @@ export default function AdminDashboard({ token, role }: AdminDashboardProps) {
     } else {
       setSuccessMsg(message);
       setTimeout(() => setSuccessMsg(null), 4000);
+    }
+  };
+
+  // CREATE & ASSIGN TASK ACTION
+  const handleAssignTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!targetClientId || !targetUserId || !targetTaskType || !targetScheduledAt) {
+      triggerNote("Please fill in all scheduling details.", true);
+      return;
+    }
+
+    setAssignLoading(true);
+    try {
+      const res = await fetch('/api/tasks', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          client_id: Number(targetClientId),
+          assigned_to: Number(targetUserId),
+          task_type: targetTaskType,
+          scheduled_at: new Date(targetScheduledAt).toISOString()
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to schedule task");
+
+      triggerNote("Task assigned & scheduled successfully!");
+      setTargetClientId('');
+      setTargetUserId('');
+      setTargetScheduledAt('');
+      fetchTasks();
+    } catch (err: any) {
+      triggerNote(err.message, true);
+    } finally {
+      setAssignLoading(false);
     }
   };
 
@@ -2230,6 +2276,93 @@ export default function AdminDashboard({ token, role }: AdminDashboardProps) {
                 </select>
               </div>
             </div>
+          </div>
+
+          {/* TASK ASSIGNMENT SCHEDULER */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col space-y-4">
+            <div className="flex items-center space-x-2 pb-2 border-b border-slate-100">
+              <CalendarPlus className="h-5 w-5 text-emerald-600 animate-pulse" />
+              <div>
+                <h4 className="text-sm font-bold text-slate-900 font-sans uppercase tracking-wide">Schedule & Assign New Task</h4>
+                <p className="text-xs text-slate-450 mt-0.5 font-medium">Create a new commercial assignment. As a Management Officer, you are authorized to delegate schedules and tasks to everyone in the system.</p>
+              </div>
+            </div>
+
+            <form onSubmit={handleAssignTask} className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+              <div className="col-span-1 md:col-span-3">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 shadow-sm">Target Client Account</label>
+                <select
+                  required
+                  value={targetClientId}
+                  onChange={(e) => setTargetClientId(e.target.value)}
+                  className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-205 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium text-slate-700 mt-1"
+                >
+                  <option value="">-- Choose Client Account --</option>
+                  {clients.map(c => (
+                    <option key={c.id} value={c.id}>{c.company_name} ({c.contact_name})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="col-span-1 md:col-span-3">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 shadow-sm">Assign Personnel (Everyone)</label>
+                <select
+                  required
+                  value={targetUserId}
+                  onChange={(e) => setTargetUserId(e.target.value)}
+                  className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-205 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium text-slate-700 mt-1"
+                >
+                  <option value="">-- Assign Employee --</option>
+                  {users
+                    .filter(u => currentRole !== 'management' || u.role !== 'admin')
+                    .map(u => (
+                      <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
+                    ))}
+                </select>
+              </div>
+
+              <div className="col-span-1 md:col-span-2">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 shadow-sm">Field Session Type</label>
+                <select
+                  required
+                  value={targetTaskType}
+                  onChange={(e) => setTargetTaskType(e.target.value)}
+                  className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-205 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium text-slate-700 mt-1"
+                >
+                  {sessionTypes.map(st => (
+                    <option key={st.id} value={st.name}>{st.name.toUpperCase()}</option>
+                  ))}
+                  {sessionTypes.length === 0 && (
+                    <>
+                      <option value="call">💼 Phone Session / Pitch Call</option>
+                      <option value="visit">📍 In-Person Office Visit</option>
+                    </>
+                  )}
+                </select>
+              </div>
+
+              <div className="col-span-1 md:col-span-2">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 shadow-sm">Scheduled Day & Time</label>
+                <input
+                  type="datetime-local"
+                  required
+                  value={targetScheduledAt}
+                  onChange={(e) => setTargetScheduledAt(e.target.value)}
+                  className="w-full text-xs px-3 py-2 bg-slate-50 border border-slate-205 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 font-medium text-slate-700 mt-1"
+                />
+              </div>
+
+              <div className="col-span-1 md:col-span-2">
+                <button
+                  id="admin-btn-schedule-task"
+                  type="submit"
+                  disabled={assignLoading}
+                  className="w-full py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition-all disabled:opacity-50 cursor-pointer text-center flex items-center justify-center h-[34px] mt-1"
+                >
+                  {assignLoading ? "Scheduling..." : "Assign Task"}
+                </button>
+              </div>
+            </form>
           </div>
 
           {/* TASK REPORT RANGE DOWNLOADER CARD */}

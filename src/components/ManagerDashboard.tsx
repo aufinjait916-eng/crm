@@ -4,7 +4,8 @@ import { Client, User, Task, ManagerAnalytics } from '../types';
 import { 
   Calendar, CalendarPlus, UserCheck, PhoneCall, MapPin, 
   Clock, CheckCircle, AlertCircle, FileText, BarChart3, Search, TrendingUp, RefreshCw,
-  ChevronLeft, ChevronRight, Volume2, User as UserIcon, Menu, Building, Download, Edit2, Trash2
+  ChevronLeft, ChevronRight, Volume2, User as UserIcon, Menu, Building, Download, Edit2, Trash2,
+  Mic, Square, RotateCcw, UploadCloud
 } from 'lucide-react';
 import { LOCATION_DATA } from '../utils/locationData';
 import DynamicFormRenderer from './DynamicFormRenderer';
@@ -72,6 +73,20 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
   const [currentUserId, setCurrentUserId] = useState<number | null>(null);
   const [activeTaskForForm, setActiveTaskForForm] = useState<Task | null>(null);
   const [completeLoading, setCompleteLoading] = useState(false);
+
+  // Geolocation States
+  const [latitude, setLatitude] = useState<number | null>(null);
+  const [longitude, setLongitude] = useState<number | null>(null);
+  const [isCapturingLocation, setIsCapturingLocation] = useState(false);
+  const [locationError, setLocationError] = useState<string | null>(null);
+
+  // Sound/Voice Recording State
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioBase64, setAudioBase64] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recorder, setRecorder] = useState<MediaRecorder | null>(null);
+  const [uploadingVoice, setUploadingVoice] = useState(false);
+  const [voiceSavedNote, setVoiceSavedNote] = useState<boolean>(false);
 
   // Task Editing states
   const [editingTask, setEditingTask] = useState<Task | null>(null);
@@ -220,6 +235,15 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
     }
   };
 
+  const isFutureTask = (task: Task) => {
+    if (!task || !task.scheduled_at) return false;
+    const taskDate = new Date(task.scheduled_at);
+    const today = new Date();
+    const taskDateMidnight = new Date(taskDate.getFullYear(), taskDate.getMonth(), taskDate.getDate());
+    const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    return taskDateMidnight > todayMidnight;
+  };
+
   // FETCH SERVICES
   const loadData = async () => {
     setRefreshLoading(true);
@@ -271,6 +295,121 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
     loadData();
   }, [token]);
 
+  useEffect(() => {
+    if (activeTaskForForm) {
+      if (activeTaskForForm.status === 'completed') {
+        // Retain previous location if editing
+      } else {
+        // Request geolocation automatically for new completion
+        setLatitude(null);
+        setLongitude(null);
+        setLocationError(null);
+        setIsCapturingLocation(true);
+        if ('geolocation' in navigator) {
+          navigator.geolocation.getCurrentPosition(
+            (position) => {
+              setLatitude(position.coords.latitude);
+              setLongitude(position.coords.longitude);
+              setIsCapturingLocation(false);
+            },
+            (error) => {
+              console.error("Geolocation error:", error);
+              setIsCapturingLocation(false);
+              if (error.code === error.PERMISSION_DENIED) {
+                setLocationError("Access denied. Please enable location permissions in browser settings.");
+              } else {
+                setLocationError("Error getting automatic coordinates: " + error.message);
+              }
+            },
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+          );
+        } else {
+          setIsCapturingLocation(false);
+          setLocationError("Web browser does not support Geolocation.");
+        }
+      }
+    } else {
+      setLatitude(null);
+      setLongitude(null);
+      setLocationError(null);
+      setIsCapturingLocation(false);
+    }
+  }, [activeTaskForForm]);
+
+  // AUDIO RECORDING UTILITIES
+  const handleStartRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      const chunks: Blob[] = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(chunks, { type: 'audio/wav' });
+        const url = URL.createObjectURL(blob);
+        setAudioUrl(url);
+
+        const reader = new FileReader();
+        reader.readAsDataURL(blob);
+        reader.onloadend = () => {
+          setAudioBase64(reader.result as string);
+        };
+      };
+
+      mediaRecorder.start();
+      setRecorder(mediaRecorder);
+      setIsRecording(true);
+      setVoiceSavedNote(false);
+    } catch (err: any) {
+      console.error(err);
+      triggerAlert("Could not access microphone. Ensure hardware permissions are set up.", true);
+    }
+  };
+
+  const handleStopRecording = () => {
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+      recorder.stream.getTracks().forEach(track => track.stop());
+      setIsRecording(false);
+    }
+  };
+
+  const handleUploadVoice = async () => {
+    if (!audioBase64 || !activeTaskForForm) return;
+    setUploadingVoice(true);
+    try {
+      const res = await fetch(`/api/tasks/${activeTaskForForm.id}/voice`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ voice_base64: audioBase64 })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setVoiceSavedNote(true);
+        triggerAlert("Voice message saved on the server successfully!");
+        loadData();
+      } else {
+        throw new Error(data.detail || "Upload rejected");
+      }
+    } catch (err: any) {
+      triggerAlert(err.message, true);
+    } finally {
+      setUploadingVoice(false);
+    }
+  };
+
+  const handleClearVoice = () => {
+    setAudioUrl(null);
+    setAudioBase64(null);
+    setVoiceSavedNote(false);
+  };
+
   // ASSIGN TASK ACTION
   const handleAssignTask = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -317,11 +456,21 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({ answers })
+        body: JSON.stringify({ 
+          answers,
+          latitude,
+          longitude
+        })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Failed to submit task details");
       triggerAlert("Task completed successfully!", false);
+      
+      // Cleanup voice states
+      setAudioUrl(null);
+      setAudioBase64(null);
+      setVoiceSavedNote(false);
+
       setActiveTaskForForm(null);
       loadData();
     } catch (err: any) {
@@ -902,7 +1051,13 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
                   <div className="flex items-center space-x-2 shrink-0">
                     {task.assigned_to === currentUserId && (
                       <button
-                        onClick={() => setActiveTaskForForm(task)}
+                        onClick={() => {
+                          if (isFutureTask(task)) {
+                            triggerAlert("The task assigned on a future date cannot be completed now.", true);
+                            return;
+                          }
+                          setActiveTaskForForm(task);
+                        }}
                         className="bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 px-3 py-1.5 rounded-lg text-xs font-bold transition"
                       >
                         Complete Task
@@ -1153,7 +1308,13 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
                             <>
                               {task.assigned_to === currentUserId && (
                                 <button
-                                  onClick={() => setActiveTaskForForm(task)}
+                                  onClick={() => {
+                                    if (isFutureTask(task)) {
+                                      triggerAlert("The task assigned on a future date cannot be completed now.", true);
+                                      return;
+                                    }
+                                    setActiveTaskForForm(task);
+                                  }}
                                   className="bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 px-2 py-1 rounded-lg text-xs font-bold transition"
                                 >
                                   Complete Task
@@ -1642,7 +1803,120 @@ export default function ManagerDashboard({ token }: ManagerDashboardProps) {
               </button>
             </div>
 
-            <div className="p-6 overflow-y-auto flex-1">
+            <div className="p-6 overflow-y-auto flex-1 space-y-6">
+              {/* AUDIO VOICE RECORDING COMPONENT */}
+              <div className="p-5 bg-slate-50 border border-slate-150 rounded-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <h5 className="text-xs font-bold text-slate-700 uppercase tracking-widest flex items-center space-x-1.5">
+                    <Mic className="h-4 w-4 text-emerald-600" />
+                    <span>Report Voice Message Memo</span>
+                  </h5>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase">Save to Server</span>
+                </div>
+                
+                <p className="text-xs text-slate-500">Record a localized voice note detailing client reactions or operational summaries.</p>
+
+                <div className="flex flex-wrap items-center gap-2 pt-1 font-semibold">
+                  {!isRecording ? (
+                    <button
+                      id="voice-start-btn"
+                      type="button"
+                      onClick={handleStartRecording}
+                      className="flex items-center space-x-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs p-2 px-3.5 rounded-lg shadow-sm transition active:scale-95"
+                    >
+                      <Mic className="h-3.5 w-3.5 animate-pulse" />
+                      <span>Record new message</span>
+                    </button>
+                  ) : (
+                    <button
+                      id="voice-stop-btn"
+                      type="button"
+                      onClick={handleStopRecording}
+                      className="flex items-center space-x-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs p-2 px-3.5 rounded-lg shadow-sm transition animate-pulse"
+                    >
+                      <Square className="h-3.5 w-3.5 fill-white" />
+                      <span>Stop recording</span>
+                    </button>
+                  )}
+
+                  {audioUrl && !isRecording && (
+                    <>
+                      <div className="flex items-center space-x-2 border bg-white p-1 px-2.5 rounded-lg">
+                        <audio src={audioUrl} controls className="h-8 max-w-[180px] text-xs" />
+                      </div>
+
+                      <button
+                        id="voice-save-btn"
+                        type="button"
+                        onClick={handleUploadVoice}
+                        disabled={uploadingVoice || !audioBase64}
+                        className="flex items-center space-x-1.5 bg-emerald-650 hover:bg-emerald-600 text-emerald-700 bg-emerald-50 border border-emerald-200 font-bold text-xs p-2 px-3.5 rounded-lg transition active:scale-95 disabled:opacity-50"
+                      >
+                        <UploadCloud className="h-4 w-4 text-emerald-600" />
+                        <span>{uploadingVoice ? "Uploading..." : "Save to server"}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleClearVoice}
+                        className="p-2 bg-slate-200 text-slate-600 hover:bg-slate-300 rounded-lg text-xs"
+                        title="Clear audio"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                {voiceSavedNote && (
+                  <div className="text-[10px] bg-emerald-100 text-emerald-800 font-extrabold px-3 py-1.5 rounded-lg flex items-center space-x-1 border border-emerald-150 animate-fade-in">
+                    <CheckCircle className="h-3.5 w-3.5 text-emerald-650" />
+                    <span>✓ File successfully finalized & synchronized on the secure storage volume!</span>
+                  </div>
+                )}
+              </div>
+
+              {/* AUTOMATIC LOCATION RECORDING STATUS */}
+              {isCapturingLocation && (
+                <div className="p-3.5 bg-blue-50 border border-blue-100 rounded-xl flex items-center space-x-2 text-xs text-blue-700 animate-pulse">
+                  <MapPin className="h-4 w-4 text-blue-500 animate-bounce shrink-0" />
+                  <span>Recording automatic check-in location coordinates...</span>
+                </div>
+              )}
+
+              {!isCapturingLocation && (latitude !== null && longitude !== null) && (
+                <div className="p-3.5 bg-emerald-50 border border-emerald-100 rounded-xl flex items-center space-x-2.5 text-xs text-emerald-800">
+                  <MapPin className="h-4.5 w-4.5 text-emerald-555 shrink-0 animate-fade-in" />
+                  <div>
+                    <p className="font-bold">
+                      {activeTaskForForm.status === 'completed' ? "Previously Captured Location Retained" : "Check-in Location Recorded Automatically"}
+                    </p>
+                    <p className="font-mono text-[10px] text-emerald-600 mt-1">
+                      Latitude: {latitude.toFixed(6)}, Longitude: {longitude.toFixed(6)}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {!isCapturingLocation && locationError && (
+                <div className="p-3.5 bg-amber-50 border border-amber-100 rounded-xl flex items-center space-x-2 text-xs text-amber-850">
+                  <MapPin className="h-4 w-4 text-amber-500 shrink-0" />
+                  <div>
+                    <p className="font-semibold text-amber-800">Automatic location recording offline</p>
+                    <p className="text-[10px] text-amber-600 mt-0.5">{locationError}</p>
+                  </div>
+                </div>
+              )}
+
+              <div className="p-3 bg-indigo-50/50 border border-indigo-100 rounded-xl text-xs text-indigo-850 flex space-x-2">
+                <AlertCircle className="h-4 w-4 text-indigo-500 shrink-0 mt-0.5" />
+                <span>
+                  {activeTaskForForm.status === 'completed' 
+                    ? "Updating these questions replaces your previous report answers."
+                    : "By filling and submitting this report, the agenda status will permanently change to Completed under manager inspection."}
+                </span>
+              </div>
+
               {/* Render Dynamic Form */}
               <DynamicFormRenderer
                 questions={(() => {
